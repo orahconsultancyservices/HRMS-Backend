@@ -1,0 +1,203 @@
+// prisma/schema.prisma
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "mysql"
+  url      = env("DATABASE_URL")
+}
+
+model Employee {
+  id               Int       @id @default(autoincrement())
+  firstName        String    @db.VarChar(100)
+  lastName         String    @db.VarChar(100)
+  employeeId       String    @unique @db.VarChar(50)
+  email            String    @unique @db.VarChar(255)
+  orgEmail         String    @unique @db.VarChar(255)
+  orgPassword      String    @db.VarChar(255)
+  phone            String?   @db.VarChar(20)
+  department       String    @db.VarChar(100)
+  position         String    @db.VarChar(100)
+  joinDate         DateTime  @default(now())
+  leaveDate        DateTime?
+  birthday         DateTime? // Added birthday field
+  location         String?   @db.VarChar(255)
+  emergencyContact String?   @db.VarChar(20)
+  avatar           String?   @db.VarChar(10)
+  isActive         Boolean   @default(true)
+  createdAt        DateTime  @default(now())
+  updatedAt        DateTime  @updatedAt
+
+  // Relations
+  leaveBalance     LeaveBalance?
+  leaveRequests    LeaveRequest[]
+  attendance       Attendance[]
+  breaks           Break[]
+  generatedReports AttendanceReport[] @relation("GeneratedReports")
+
+  @@index([department])
+  @@index([position])
+  @@index([employeeId])
+}
+
+model LeaveBalance {
+  id          Int      @id @default(autoincrement())
+  employeeId  Int      @unique
+  casual      Int      @default(12)
+  sick        Int      @default(8)
+  earned      Int      @default(20)
+  maternity   Int      @default(90)
+  paternity   Int      @default(7)
+  bereavement Int      @default(7)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  employee Employee @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+}
+
+model LeaveRequest {
+  id                 Int         @id @default(autoincrement())
+  empId              Int
+  type               LeaveType
+  from               DateTime
+  to                 DateTime
+  days               Int
+  reason             String      @db.Text
+  status             LeaveStatus @default(pending)
+  appliedDate        DateTime    @default(now())
+  contactDuringLeave String?     @db.VarChar(20)
+  addressDuringLeave String?     @db.Text
+  managerNotes       String?     @db.Text
+  approvedBy         String?     @db.VarChar(100)
+  approvedDate       DateTime?
+  isHalfDay          Boolean @default(false) 
+  isPaid             Boolean @default(true)  
+  paidDays           Float   @default(0)    
+  rejectionReason    String?     @db.Text
+  createdAt          DateTime    @default(now())
+  updatedAt          DateTime    @updatedAt
+
+  employee Employee @relation(fields: [empId], references: [id], onDelete: Cascade)
+
+  @@index([empId])
+  @@index([status])
+  @@index([appliedDate])
+}
+
+enum LeaveType {
+  Casual
+  Sick
+  Earned
+  Maternity
+  Paternity
+  Bereavement
+  Paid
+  Unpaid
+  HalfDay
+}
+
+
+enum LeaveStatus {
+  pending
+  approved
+  rejected
+}
+
+model Attendance {
+  id         Int              @id @default(autoincrement())
+  employeeId Int
+  date       DateTime
+  checkIn    DateTime?
+  checkOut   DateTime?
+  totalHours Float?           @default(0.0)
+  status     AttendanceStatus @default(present)
+  breaks     Int?             @default(0)
+  location   String?          @db.VarChar(255)
+  notes      String?          @db.Text
+  createdBy  String?          @db.VarChar(100)
+  updatedBy  String?          @db.VarChar(100)
+  createdAt  DateTime         @default(now())
+  updatedAt  DateTime         @updatedAt
+
+  // Relations
+  employee     Employee @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+  breakRecords Break[]
+
+  @@unique([employeeId, date])
+  @@index([date])
+  @@index([employeeId])
+  @@index([status])
+}
+
+enum AttendanceStatus {
+  present
+  absent
+  late
+  half_day
+  on_leave
+}
+
+model Break {
+  id         Int         @id @default(autoincrement())
+  employeeId Int
+  date       DateTime
+  startTime  DateTime
+  endTime    DateTime?
+  duration   Int?        @default(0) // in minutes
+  reason     String?     @db.VarChar(255)
+  status     BreakStatus @default(active)
+  createdAt  DateTime    @default(now())
+  updatedAt  DateTime    @updatedAt
+
+  // Relations
+  employee   Employee    @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+  attendance Attendance? @relation(fields: [employeeId, date], references: [employeeId, date])
+
+  @@index([employeeId])
+  @@index([date])
+  @@index([status])
+}
+
+enum BreakStatus {
+  active
+  completed
+  cancelled
+}
+
+model AttendanceReport {
+  id          Int          @id @default(autoincrement())
+  reportDate  DateTime
+  reportType  ReportType
+  generatedBy Int
+  department  String?      @db.VarChar(100)
+  filters     Json?
+  fileUrl     String?      @db.VarChar(500)
+  format      String       @db.VarChar(10)
+  status      ReportStatus @default(processing)
+  createdAt   DateTime     @default(now())
+  completedAt DateTime?
+
+  // Relations
+  generatedByEmployee Employee @relation("GeneratedReports", fields: [generatedBy], references: [id], onDelete: Cascade)
+
+  @@index([reportDate])
+  @@index([reportType])
+  @@index([status])
+}
+
+enum ReportType {
+  daily
+  weekly
+  monthly
+  quarterly
+  yearly
+  custom
+}
+
+enum ReportStatus {
+  processing
+  completed
+  failed
+} 
