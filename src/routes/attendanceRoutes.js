@@ -1,4 +1,4 @@
-// src/routes/attendanceRoutes.js
+// src/routes/attendanceRoutes.js - UPDATED VERSION
 const express = require('express');
 const router = express.Router();
 
@@ -18,6 +18,13 @@ const {
   getEmployeeBreaks
 } = require('../controllers/attendanceController');
 
+// Import export controller
+const {
+  exportDailyAttendance,
+  exportWeeklyAttendance,
+  exportMonthlyAttendance
+} = require('../controllers/Attendanceexportcontroller');
+
 /**
  * @swagger
  * tags:
@@ -25,53 +32,17 @@ const {
  *   description: Employee attendance management APIs
  */
 
+// Export routes (add these BEFORE the general routes)
+router.get('/employee/:employeeId/export/daily', exportDailyAttendance);
+router.get('/employee/:employeeId/export/weekly', exportWeeklyAttendance);
+router.get('/employee/:employeeId/export/monthly', exportMonthlyAttendance);
+
 /**
  * @swagger
  * /api/attendance:
  *   get:
  *     summary: Get all attendance records
  *     tags: [Attendance]
- *     parameters:
- *       - in: query
- *         name: employeeId
- *         schema:
- *           type: string
- *         description: Filter by employee ID
- *       - in: query
- *         name: department
- *         schema:
- *           type: string
- *         description: Filter by department
- *       - in: query
- *         name: startDate
- *         schema:
- *           type: string
- *           format: date
- *         description: Start date filter
- *       - in: query
- *         name: endDate
- *         schema:
- *           type: string
- *           format: date
- *         description: End date filter
- *       - in: query
- *         name: status
- *         schema:
- *           type: string
- *           enum: [present, absent, late, half_day, on_leave]
- *         description: Filter by status
- *       - in: query
- *         name: page
- *         schema:
- *           type: integer
- *           default: 1
- *         description: Page number
- *       - in: query
- *         name: limit
- *         schema:
- *           type: integer
- *           default: 50
- *         description: Records per page
  */
 router.get('/', getAllAttendance);
 

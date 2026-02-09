@@ -1,23 +1,15 @@
-// src/controllers/attendanceController.js
+// src/controllers/attendanceController.js - UPDATED VERSION
 const prisma = require("../lib/prisma");
 
-
-
-// Add this at the very top of attendanceController.js, right after the imports:
-
 // Helper function to get database ID from either numeric ID or employee code
-// In attendanceController.js, update the getDatabaseEmployeeId function
-
 const getDatabaseEmployeeId = async (employeeIdentifier) => {
   try {
     console.log('🔄 getDatabaseEmployeeId called with:', employeeIdentifier);
 
-    // If it's already a number, use it
     if (!isNaN(parseInt(employeeIdentifier))) {
       const id = parseInt(employeeIdentifier);
       console.log('✅ Using numeric ID directly:', id);
 
-      // Verify employee exists
       const employee = await prisma.employee.findUnique({
         where: { id: id }
       });
@@ -29,7 +21,6 @@ const getDatabaseEmployeeId = async (employeeIdentifier) => {
       return id;
     }
 
-    // It's an employee code (EMP001)
     console.log('🔍 Looking up employee by code:', employeeIdentifier);
 
     const employee = await prisma.employee.findUnique({
@@ -46,16 +37,36 @@ const getDatabaseEmployeeId = async (employeeIdentifier) => {
   } catch (error) {
     console.error('❌ Error in getDatabaseEmployeeId:', error.message);
 
-    // For development, you can return a fallback ID
     if (process.env.NODE_ENV === 'development') {
       console.log('⚠️ Development mode: Returning fallback ID 1');
-      return 1; // Fallback for testing
+      return 1;
     }
 
     throw error;
   }
 };
 
+// Helper to calculate break time for attendance records
+const calculateBreakTimeForRecords = async (attendanceRecords) => {
+  return await Promise.all(
+    attendanceRecords.map(async (record) => {
+      const breaks = await prisma.break.findMany({
+        where: {
+          employeeId: record.employeeId,
+          date: record.date,
+          status: 'completed'
+        }
+      });
+      
+      const totalBreakMinutes = breaks.reduce((sum, brk) => sum + (brk.duration || 0), 0);
+      
+      return {
+        ...record,
+        breaks: totalBreakMinutes
+      };
+    })
+  );
+};
 
 // Get all attendance records with filters
 exports.getAllAttendance = async (req, res, next) => {
@@ -124,6 +135,9 @@ exports.getAllAttendance = async (req, res, next) => {
       take
     });
 
+    // Add break time to each record
+    const attendanceWithBreaks = await calculateBreakTimeForRecords(attendance);
+
     // Get total count for pagination
     const total = await prisma.attendance.count({ where });
 
@@ -138,12 +152,12 @@ exports.getAllAttendance = async (req, res, next) => {
 
     res.status(200).json({
       success: true,
-      count: attendance.length,
+      count: attendanceWithBreaks.length,
       total,
       page: parseInt(page),
       pages: Math.ceil(total / limit),
       stats,
-      data: attendance
+      data: attendanceWithBreaks
     });
   } catch (error) {
     next(error);
@@ -196,11 +210,10 @@ exports.getEmployeeAttendance = async (req, res, next) => {
     const { employeeId } = req.params;
     const { startDate, endDate, month, year } = req.query;
 
-    // FIX: Use helper to get database ID
     const databaseEmployeeId = await getDatabaseEmployeeId(employeeId);
 
     const where = {
-      employeeId: databaseEmployeeId // Use the converted ID
+      employeeId: databaseEmployeeId
     };
 
     // Apply date filters
@@ -235,21 +248,24 @@ exports.getEmployeeAttendance = async (req, res, next) => {
       }
     });
 
+    // Add break time to each record
+    const attendanceWithBreaks = await calculateBreakTimeForRecords(attendance);
+
     // Calculate statistics
     const stats = {
-      present: attendance.filter(a => a.status === 'present').length,
-      absent: attendance.filter(a => a.status === 'absent').length,
-      late: attendance.filter(a => a.status === 'late').length,
-      half_day: attendance.filter(a => a.status === 'half_day').length,
-      on_leave: attendance.filter(a => a.status === 'on_leave').length,
-      totalHours: attendance.reduce((acc, curr) => acc + (curr.totalHours || 0), 0)
+      present: attendanceWithBreaks.filter(a => a.status === 'present').length,
+      absent: attendanceWithBreaks.filter(a => a.status === 'absent').length,
+      late: attendanceWithBreaks.filter(a => a.status === 'late').length,
+      half_day: attendanceWithBreaks.filter(a => a.status === 'half_day').length,
+      on_leave: attendanceWithBreaks.filter(a => a.status === 'on_leave').length,
+      totalHours: attendanceWithBreaks.reduce((acc, curr) => acc + (curr.totalHours || 0), 0)
     };
 
     res.status(200).json({
       success: true,
-      count: attendance.length,
+      count: attendanceWithBreaks.length,
       stats,
-      data: attendance
+      data: attendanceWithBreaks
     });
   } catch (error) {
     next(error);
@@ -269,14 +285,11 @@ exports.clockIn = async (req, res, next) => {
       type: typeof employeeId
     });
 
-    // FIRST: Check if employeeId is EMP001 format
-    // If it's not a number, we need to find the database ID
     let databaseEmployeeId;
 
     if (isNaN(parseInt(employeeId))) {
       console.log('🔄 Employee ID is not numeric, looking up by employee code:', employeeId);
 
-      // Find employee by employeeId (EMP001) code
       const employee = await prisma.employee.findUnique({
         where: { employeeId: employeeId }
       });
@@ -298,7 +311,6 @@ exports.clockIn = async (req, res, next) => {
       databaseEmployeeId = parseInt(employeeId);
       console.log('✅ Using numeric employee ID:', databaseEmployeeId);
 
-      // Verify employee exists
       const employee = await prisma.employee.findUnique({
         where: { id: databaseEmployeeId }
       });
@@ -320,7 +332,6 @@ exports.clockIn = async (req, res, next) => {
     const today = new Date();
     today.setHours(0, 0, 0, 0);
 
-    // Check if already clocked in today
     const existingAttendance = await prisma.attendance.findUnique({
       where: {
         employeeId_date: {
@@ -337,19 +348,17 @@ exports.clockIn = async (req, res, next) => {
       });
     }
 
-    // Determine status based on time
     const checkInTime = new Date();
     const hour = checkInTime.getHours();
     const minute = checkInTime.getMinutes();
-    const isLate = hour > 9 || (hour === 9 && minute > 30); // Late after 9:30 AM
+    const isLate = hour > 9 || (hour === 9 && minute > 30);
 
-    // FIX HERE: Get location and notes from req.body
     const { location, notes } = req.body || {};
 
     const attendance = await prisma.attendance.upsert({
       where: {
         employeeId_date: {
-          employeeId: databaseEmployeeId, // Use databaseEmployeeId here
+          employeeId: databaseEmployeeId,
           date: today
         }
       },
@@ -361,7 +370,7 @@ exports.clockIn = async (req, res, next) => {
         updatedAt: new Date()
       },
       create: {
-        employeeId: databaseEmployeeId, // Use databaseEmployeeId here
+        employeeId: databaseEmployeeId,
         date: today,
         checkIn: checkInTime,
         status: isLate ? 'late' : 'present',
@@ -398,20 +407,17 @@ exports.clockOut = async (req, res, next) => {
 
     console.log('🔵 Clock Out Request for:', employeeId);
 
-    // FIX: Get database employee ID using helper
     const databaseEmployeeId = await getDatabaseEmployeeId(employeeId);
 
-    // FIX: Get location and notes from req.body
     const { location, notes } = req.body || {};
 
     const today = new Date();
     today.setHours(0, 0, 0, 0);
 
-    // Get today's attendance
     const attendance = await prisma.attendance.findUnique({
       where: {
         employeeId_date: {
-          employeeId: databaseEmployeeId, // Use databaseEmployeeId
+          employeeId: databaseEmployeeId,
           date: today
         }
       }
@@ -433,13 +439,11 @@ exports.clockOut = async (req, res, next) => {
 
     const checkOutTime = new Date();
 
-    // Calculate total hours
     let totalHours = 0;
     if (attendance.checkIn) {
       const diffMs = checkOutTime - attendance.checkIn;
       totalHours = diffMs / (1000 * 60 * 60);
 
-      // Adjust for breaks
       const breaks = await prisma.break.findMany({
         where: {
           employeeId: databaseEmployeeId,
@@ -452,13 +456,12 @@ exports.clockOut = async (req, res, next) => {
       totalHours -= breakMinutes / 60;
     }
 
-    // Determine if half day (less than 4 hours)
     const isHalfDay = totalHours < 4;
 
     const updatedAttendance = await prisma.attendance.update({
       where: {
         employeeId_date: {
-          employeeId: databaseEmployeeId, // Use databaseEmployeeId
+          employeeId: databaseEmployeeId,
           date: today
         }
       },
@@ -536,7 +539,6 @@ exports.getTodayStatus = async (req, res, next) => {
     } catch (dbError) {
       console.error('❌ Database error in getTodayStatus:', dbError.message);
 
-      // For development, return null instead of crashing
       if (process.env.NODE_ENV === 'development') {
         console.log('⚠️ Development mode: Returning null for attendance');
         return res.status(200).json({
@@ -548,7 +550,6 @@ exports.getTodayStatus = async (req, res, next) => {
       throw dbError;
     }
 
-    // Add cache control headers
     res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, private');
     res.setHeader('Pragma', 'no-cache');
     res.setHeader('Expires', '0');
@@ -581,7 +582,6 @@ exports.markAttendance = async (req, res, next) => {
     const attendanceDate = new Date(date);
     attendanceDate.setHours(0, 0, 0, 0);
 
-    // Calculate total hours if checkIn and checkOut provided
     let totalHours = 0;
     if (checkIn && checkOut) {
       const checkInTime = new Date(checkIn);
@@ -751,7 +751,6 @@ exports.getAttendanceStats = async (req, res, next) => {
         where.date.lte = new Date(endDate);
       }
     } else {
-      // Default to current month
       const now = new Date();
       const start = new Date(now.getFullYear(), now.getMonth(), 1);
       const end = new Date(now.getFullYear(), now.getMonth() + 1, 0);
@@ -761,7 +760,6 @@ exports.getAttendanceStats = async (req, res, next) => {
       };
     }
 
-    // Get all attendance for the period
     const attendance = await prisma.attendance.findMany({
       where,
       include: {
@@ -774,7 +772,6 @@ exports.getAttendanceStats = async (req, res, next) => {
       }
     });
 
-    // Calculate statistics
     const stats = {
       totalEmployees: await prisma.employee.count({
         where: department && department !== 'all' ? { department } : {}
@@ -790,7 +787,6 @@ exports.getAttendanceStats = async (req, res, next) => {
         : 0
     };
 
-    // Department-wise breakdown
     const departmentBreakdown = {};
     attendance.forEach(record => {
       const dept = record.employee.department;
@@ -808,7 +804,6 @@ exports.getAttendanceStats = async (req, res, next) => {
       departmentBreakdown[dept].total++;
     });
 
-    // Daily trend for last 30 days
     const dailyTrend = [];
     const last30Days = new Date();
     last30Days.setDate(last30Days.getDate() - 30);
@@ -856,16 +851,14 @@ exports.startBreak = async (req, res, next) => {
     const { employeeId } = req.params;
     const { reason } = req.body || {};
 
-    // FIX: Get database employee ID
     const databaseEmployeeId = await getDatabaseEmployeeId(employeeId);
 
     const today = new Date();
     today.setHours(0, 0, 0, 0);
 
-    // Check if there's an active break
     const activeBreak = await prisma.break.findFirst({
       where: {
-        employeeId: databaseEmployeeId, // Use databaseEmployeeId
+        employeeId: databaseEmployeeId,
         date: today,
         status: 'active'
       }
@@ -880,7 +873,7 @@ exports.startBreak = async (req, res, next) => {
 
     const breakRecord = await prisma.break.create({
       data: {
-        employeeId: databaseEmployeeId, // Use databaseEmployeeId
+        employeeId: databaseEmployeeId,
         date: today,
         startTime: new Date(),
         reason: reason || null,
@@ -899,19 +892,16 @@ exports.startBreak = async (req, res, next) => {
   }
 };
 
-
-
 exports.endBreak = async (req, res, next) => {
   try {
     const { employeeId, breakId } = req.params;
 
-    // FIX: Get database employee ID
     const databaseEmployeeId = await getDatabaseEmployeeId(employeeId);
 
     const breakRecord = await prisma.break.findFirst({
       where: {
         id: parseInt(breakId),
-        employeeId: databaseEmployeeId, // Use databaseEmployeeId
+        employeeId: databaseEmployeeId,
         status: 'active'
       }
     });
@@ -924,7 +914,7 @@ exports.endBreak = async (req, res, next) => {
     }
 
     const endTime = new Date();
-    const duration = Math.round((endTime - breakRecord.startTime) / (1000 * 60)); // in minutes
+    const duration = Math.round((endTime - breakRecord.startTime) / (1000 * 60));
 
     const updatedBreak = await prisma.break.update({
       where: { id: parseInt(breakId) },
@@ -946,18 +936,15 @@ exports.endBreak = async (req, res, next) => {
   }
 };
 
-
-// Get employee breaks
 exports.getEmployeeBreaks = async (req, res, next) => {
   try {
     const { employeeId } = req.params;
     const { date } = req.query;
 
-    // FIX: Get database employee ID
     const databaseEmployeeId = await getDatabaseEmployeeId(employeeId);
 
     const where = {
-      employeeId: databaseEmployeeId // Use databaseEmployeeId
+      employeeId: databaseEmployeeId
     };
 
     if (date) {
@@ -971,7 +958,6 @@ exports.getEmployeeBreaks = async (req, res, next) => {
       orderBy: { startTime: 'desc' }
     });
 
-    // Add cache control headers
     res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, private');
     res.setHeader('Pragma', 'no-cache');
     res.setHeader('Expires', '0');

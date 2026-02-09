@@ -1,3 +1,5 @@
+// server.js - UPDATED WITH TASK ROUTES
+
 const express = require('express');
 const cors = require('cors');
 const dotenv = require('dotenv');
@@ -23,18 +25,19 @@ app.use('/api', (req, res, next) => {
   next();
 });
 
-app.use(express.json()); // for parsing application/json
-app.use(express.urlencoded({ extended: true })); // for parsing application/x-www-form-urlencoded
+app.use(express.json());
+app.use(express.urlencoded({ extended: true }));
 
 // Swagger Docs
 app.use('/api-docs', swaggerUi.serve, swaggerUi.setup(swaggerSpec));
 
 // Import routes
-const authRoutes = require('./routes/authRoutes'); // Add this
+const authRoutes = require('./routes/authRoutes');
 const employeeRoutes = require('./routes/employeeRoutes');
 const leaveRoutes = require('./routes/leaveRoutes');
 const attendanceRoutes = require('./routes/attendanceRoutes');
 const birthdayRoutes = require('./routes/birthdayRoutes');
+const taskRoutes = require('./routes/taskRoutes'); // NEW: Task routes
 
 // Import middleware
 const errorHandler = require('./middleware/errorHandler');
@@ -44,11 +47,12 @@ app.use(bodyParser.json());
 app.use(bodyParser.urlencoded({ extended: true }));
 
 // API Routes
-app.use('/api/auth', authRoutes); // Add this FIRST
+app.use('/api/auth', authRoutes);
 app.use('/api/employees', employeeRoutes);
 app.use('/api/leaves', leaveRoutes);
 app.use('/api/attendance', attendanceRoutes);
 app.use('/api/birthdays', birthdayRoutes);
+app.use('/api/tasks', taskRoutes); // NEW: Task routes
 
 // Health check endpoint
 app.get('/health', (req, res) => {
@@ -70,6 +74,7 @@ app.get('/', (req, res) => {
       leaves: '/api/leaves',
       attendance: '/api/attendance',
       birthdays: '/api/birthdays',
+      tasks: '/api/tasks', // NEW
       health: '/health'
     }
   });

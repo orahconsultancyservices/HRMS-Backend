@@ -1,4 +1,4 @@
-// prisma/schema.prisma
+// prisma/schema.prisma - COMPLETE UPDATED SCHEMA FOR PHASE 1
 
 generator client {
   provider = "prisma-client-js"
@@ -9,6 +9,10 @@ datasource db {
   url      = env("DATABASE_URL")
 }
 
+// ============================================
+// CORE EMPLOYEE MANAGEMENT (UPDATED)
+// ============================================
+
 model Employee {
   id               Int       @id @default(autoincrement())
   firstName        String    @db.VarChar(100)
@@ -18,11 +22,17 @@ model Employee {
   orgEmail         String    @unique @db.VarChar(255)
   orgPassword      String    @db.VarChar(255)
   phone            String?   @db.VarChar(20)
-  department       String    @db.VarChar(100)
-  position         String    @db.VarChar(100)
+  
+  // NEW: Department & Designation Links
+  departmentId     Int?
+  designationId    Int?
+  
+  // Existing fields
+  department       String    @db.VarChar(100)  // Keep for backward compatibility
+  position         String    @db.VarChar(100)  // Keep for backward compatibility
   joinDate         DateTime  @default(now())
   leaveDate        DateTime?
-  birthday         DateTime? // Added birthday field
+  birthday         DateTime?
   location         String?   @db.VarChar(255)
   emergencyContact String?   @db.VarChar(20)
   avatar           String?   @db.VarChar(10)
@@ -30,31 +40,140 @@ model Employee {
   createdAt        DateTime  @default(now())
   updatedAt        DateTime  @updatedAt
 
-  // Relations
+  // NEW: Department & Designation Relations
+  dept             Department?  @relation("EmployeeDepartment", fields: [departmentId], references: [id])
+  designation      Designation? @relation("EmployeeDesignation", fields: [designationId], references: [id])
+
+  // Existing Relations
   leaveBalance     LeaveBalance?
   leaveRequests    LeaveRequest[]
   attendance       Attendance[]
   breaks           Break[]
   generatedReports AttendanceReport[] @relation("GeneratedReports")
+  
+  // Task Management Relations
+  assignedTasks    Task[]             @relation("AssignedTasks")
+  createdTasks     Task[]             @relation("CreatedTasks")
+  taskSubmissions  TaskSubmission[]
+  
+  // NEW: Task Adjustment Relations
+  adjustedTasks    Task[]             @relation("TaskAdjustments")
+  
+  // NEW: Performance Relations
+  monthlyPerformance     MonthlyPerformance[] @relation("EmployeePerformance")
+  performanceRemarks     MonthlyPerformance[] @relation("PerformanceRemarks")
+  performanceLocks       MonthlyPerformance[] @relation("PerformanceLocks")
+  
+  // NEW: Daily Activity Relations
+  dailyActivities        DailyActivityLog[]   @relation("EmployeeActivities")
 
-  @@index([department])
+  @@index([departmentId])
+  @@index([designationId])
   @@index([position])
   @@index([employeeId])
 }
 
+// ============================================
+// NEW: DEPARTMENT MODEL
+// ============================================
+
+model Department {
+  id          Int      @id @default(autoincrement())
+  name        String   @unique @db.VarChar(100)
+  code        String   @unique @db.VarChar(20)
+  description String?  @db.Text
+  isActive    Boolean  @default(true)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+  
+  // Relations
+  designations Designation[] @relation("DepartmentDesignations")
+  employees    Employee[]    @relation("EmployeeDepartment")
+  
+  @@index([code])
+  @@index([isActive])
+}
+
+// ============================================
+// NEW: DESIGNATION MODEL (Role-based KPIs)
+// ============================================
+
+model Designation {
+  id           Int      @id @default(autoincrement())
+  name         String   @db.VarChar(100)
+  code         String   @db.VarChar(20)
+  departmentId Int
+  description  String?  @db.Text
+  isActive     Boolean  @default(true)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+  
+  // Relations
+  department      Department        @relation("DepartmentDesignations", fields: [departmentId], references: [id], onDelete: Cascade)
+  defaultKPIs     DefaultKPI[]      @relation("DesignationKPIs")
+  employees       Employee[]        @relation("EmployeeDesignation")
+  
+  @@unique([departmentId, code])
+  @@index([departmentId])
+  @@index([isActive])
+}
+
+// ============================================
+// NEW: DEFAULT KPI MODEL (Per Designation)
+// ============================================
+
+model DefaultKPI {
+  id            Int      @id @default(autoincrement())
+  designationId Int
+  metricName    String   @db.VarChar(100)
+  type          TaskType // daily, weekly, monthly
+  category      TaskCategory
+  defaultTarget Int
+  unit          String   @db.VarChar(50)
+  
+  // NEW: For monthly targets with ranges
+  targetMin     Int?     // Minimum target for monthly (e.g., 2400)
+  targetMax     Int?     // Maximum target for monthly (e.g., 2600)
+  
+  description   String?  @db.Text
+  isActive      Boolean  @default(true)
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+  
+  // Relations
+  designation Designation @relation("DesignationKPIs", fields: [designationId], references: [id], onDelete: Cascade)
+  
+  @@unique([designationId, metricName, type])
+  @@index([designationId])
+  @@index([type])
+  @@index([isActive])
+}
+
+// ============================================
+// LEAVE MANAGEMENT (EXISTING - NO CHANGES)
+// ============================================
+
 model LeaveBalance {
   id          Int      @id @default(autoincrement())
   employeeId  Int      @unique
-  casual      Int      @default(12)
-  sick        Int      @default(8)
-  earned      Int      @default(20)
-  maternity   Int      @default(90)
-  paternity   Int      @default(7)
-  bereavement Int      @default(7)
+  casual      Float    @default(12)   // CHANGED: Support decimals
+  sick        Float    @default(8)    // CHANGED: Support decimals
+  earned      Float    @default(20)   // CHANGED: Support decimals
+  maternity   Float    @default(90)   // CHANGED: Support decimals
+  paternity   Float    @default(7)    // CHANGED: Support decimals
+  bereavement Float    @default(7)    // CHANGED: Support decimals
+  
+  // NEW: Cached paid leave balance for performance
+  paidEarned    Int      @default(0)  // Whole number
+  paidConsumed  Float    @default(0)  // Can be decimal
+  lastUpdated   DateTime @default(now()) @updatedAt
+  
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
 
   employee Employee @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+  
+  @@index([employeeId])
 }
 
 model LeaveRequest {
@@ -63,7 +182,7 @@ model LeaveRequest {
   type               LeaveType
   from               DateTime
   to                 DateTime
-  days               Int
+  days               Float       // CHANGED: Int -> Float to support 0.5 for half days
   reason             String      @db.Text
   status             LeaveStatus @default(pending)
   appliedDate        DateTime    @default(now())
@@ -72,9 +191,9 @@ model LeaveRequest {
   managerNotes       String?     @db.Text
   approvedBy         String?     @db.VarChar(100)
   approvedDate       DateTime?
-  isHalfDay          Boolean @default(false) 
-  isPaid             Boolean @default(true)  
-  paidDays           Float   @default(0)    
+  isHalfDay          Boolean     @default(false)
+  isPaid             Boolean     @default(true)
+  paidDays           Float       @default(0) // Already Float, good!
   rejectionReason    String?     @db.Text
   createdAt          DateTime    @default(now())
   updatedAt          DateTime    @updatedAt
@@ -84,7 +203,46 @@ model LeaveRequest {
   @@index([empId])
   @@index([status])
   @@index([appliedDate])
+  @@index([from, to]) // NEW: For overlap checking
+  @@index([isPaid, status]) // NEW: For paid leave queries
 }
+
+model LeaveAuditLog {
+  id          Int      @id @default(autoincrement())
+  leaveId     Int
+  action      String   @db.VarChar(50) // created, approved, rejected, cancelled
+  performedBy Int
+  oldStatus   String?  @db.VarChar(20)
+  newStatus   String?  @db.VarChar(20)
+  oldDays     Float?
+  newDays     Float?
+  notes       String?  @db.Text
+  createdAt   DateTime @default(now())
+  
+  @@index([leaveId])
+  @@index([performedBy])
+  @@index([createdAt])
+}
+
+model LeavePolicyConfig {
+  id                    Int      @id @default(autoincrement())
+  policyName            String   @db.VarChar(100)
+  paidLeavesPerMonth    Float    @default(1)
+  maxAdvanceBookingDays Int      @default(90)
+  minNoticeDays         Int      @default(1)
+  maxConsecutiveDays    Int      @default(30)
+  carryForwardEnabled   Boolean  @default(false)
+  maxCarryForward       Int      @default(0)
+  isActive              Boolean  @default(true)
+  effectiveFrom         DateTime
+  effectiveTo           DateTime?
+  createdAt             DateTime @default(now())
+  updatedAt             DateTime @updatedAt
+  
+  @@index([isActive, effectiveFrom])
+}
+
+
 
 enum LeaveType {
   Casual
@@ -98,12 +256,15 @@ enum LeaveType {
   HalfDay
 }
 
-
 enum LeaveStatus {
   pending
   approved
   rejected
 }
+
+// ============================================
+// ATTENDANCE MANAGEMENT (EXISTING - NO CHANGES)
+// ============================================
 
 model Attendance {
   id         Int              @id @default(autoincrement())
@@ -121,7 +282,6 @@ model Attendance {
   createdAt  DateTime         @default(now())
   updatedAt  DateTime         @updatedAt
 
-  // Relations
   employee     Employee @relation(fields: [employeeId], references: [id], onDelete: Cascade)
   breakRecords Break[]
 
@@ -145,13 +305,12 @@ model Break {
   date       DateTime
   startTime  DateTime
   endTime    DateTime?
-  duration   Int?        @default(0) // in minutes
+  duration   Int?        @default(0)
   reason     String?     @db.VarChar(255)
   status     BreakStatus @default(active)
   createdAt  DateTime    @default(now())
   updatedAt  DateTime    @updatedAt
 
-  // Relations
   employee   Employee    @relation(fields: [employeeId], references: [id], onDelete: Cascade)
   attendance Attendance? @relation(fields: [employeeId, date], references: [employeeId, date])
 
@@ -179,7 +338,6 @@ model AttendanceReport {
   createdAt   DateTime     @default(now())
   completedAt DateTime?
 
-  // Relations
   generatedByEmployee Employee @relation("GeneratedReports", fields: [generatedBy], references: [id], onDelete: Cascade)
 
   @@index([reportDate])
@@ -200,4 +358,210 @@ enum ReportStatus {
   processing
   completed
   failed
-} 
+}
+
+// ============================================
+// TASK MANAGEMENT MODELS (UPDATED)
+// ============================================
+
+model Task {
+  id             Int            @id @default(autoincrement())
+  title          String         @db.VarChar(255)
+  description    String         @db.Text
+  type           TaskType
+  category       TaskCategory
+  target         Int
+  achieved       Int            @default(0)
+  unit           String         @db.VarChar(50)
+  deadline       DateTime
+  status         TaskStatus     @default(active)
+  assignedDate   DateTime       @default(now())
+  priority       TaskPriority   @default(medium)
+  assignedToId   Int
+  assignedById   Int
+  notes          String?        @db.Text
+  recurring      Boolean        @default(false)
+  recurrence     TaskRecurrence?
+  
+  // NEW: Lock & Adjustment Fields
+  isLocked       Boolean   @default(false)  // Lock after month-end
+  lockDate       DateTime? // When it was locked
+  adjustedBy     Int?      // Who adjusted the target
+  adjustedDate   DateTime? // When target was adjusted
+  originalTarget Int?      // Store original for audit trail
+  comments       String?   @db.Text // Team lead remarks
+  
+  createdAt      DateTime       @default(now())
+  updatedAt      DateTime       @updatedAt
+
+  // Relations
+  assignedTo   Employee         @relation("AssignedTasks", fields: [assignedToId], references: [id], onDelete: Cascade)
+  assignedBy   Employee         @relation("CreatedTasks", fields: [assignedById], references: [id], onDelete: Cascade)
+  adjuster     Employee?        @relation("TaskAdjustments", fields: [adjustedBy], references: [id])
+  submissions  TaskSubmission[] @relation("TaskSubmissions")
+  
+  // NEW: Daily Activity Relation
+  activities   DailyActivityLog[] @relation("TaskActivities")
+
+  @@index([assignedToId])
+  @@index([assignedById])
+  @@index([status])
+  @@index([deadline])
+  @@index([type])
+  @@index([isLocked])
+}
+
+enum TaskType {
+  daily
+  weekly
+  monthly
+}
+
+enum TaskCategory {
+  applications
+  interviews
+  assessments
+  calls
+  meetings
+  closures
+  screenings
+  submissions
+  placements
+}
+
+enum TaskStatus {
+  active
+  completed
+  overdue
+}
+
+enum TaskPriority {
+  low
+  medium
+  high
+}
+
+enum TaskRecurrence {
+  daily
+  weekly
+  monthly
+}
+
+model TaskSubmission {
+  id         Int      @id @default(autoincrement())
+  taskId     Int
+  employeeId Int
+  count      Int
+  date       DateTime @default(now())
+  notes      String?  @db.Text
+  
+  // NEW: Profile comment for recruiters managing multiple positions
+  profileComment String? @db.Text // "Applied for: Senior Developer - LinkedIn"
+  
+  verified   Boolean  @default(false)
+  verifiedBy Int?
+  verifiedAt DateTime?
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  // Relations
+  task     Task     @relation("TaskSubmissions", fields: [taskId], references: [id], onDelete: Cascade)
+  employee Employee @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+
+  @@index([taskId])
+  @@index([employeeId])
+  @@index([date])
+  @@index([verified])
+}
+
+// ============================================
+// NEW: MONTHLY PERFORMANCE SNAPSHOT
+// (Immutable History)
+// ============================================
+
+model MonthlyPerformance {
+  id               Int      @id @default(autoincrement())
+  employeeId       Int
+  year             Int
+  month            Int      // 1-12
+  designationId    Int?
+  departmentId     Int?
+  
+  // Aggregated metrics
+  totalTasksAssigned Int
+  totalTasksCompleted Int
+  totalTarget        Int
+  totalAchieved      Int
+  achievementPercent Float
+  
+  // Breakdown by task type
+  dailyTarget        Int     @default(0)
+  dailyAchieved      Int     @default(0)
+  weeklyTarget       Int     @default(0)
+  weeklyAchieved     Int     @default(0)
+  monthlyTarget      Int     @default(0)
+  monthlyAchieved    Int     @default(0)
+  
+  // Trend analysis
+  trendVsLastMonth   String?  @db.VarChar(50) // "up", "down", "stable"
+  percentageChange   Float?
+  
+  // Remarks
+  teamLeadRemarks String?  @db.Text
+  remarkedBy      Int?
+  remarkedAt      DateTime?
+  
+  // Lock status (IMMUTABLE after lock)
+  isLocked    Boolean  @default(false)
+  lockedBy    Int?
+  lockedAt    DateTime?
+  
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+  
+  // Relations
+  employee   Employee @relation("EmployeePerformance", fields: [employeeId], references: [id], onDelete: Cascade)
+  remarker   Employee? @relation("PerformanceRemarks", fields: [remarkedBy], references: [id])
+  locker     Employee? @relation("PerformanceLocks", fields: [lockedBy], references: [id])
+  
+  @@unique([employeeId, year, month])
+  @@index([employeeId])
+  @@index([year, month])
+  @@index([isLocked])
+  @@index([designationId])
+  @@index([departmentId])
+}
+
+// ============================================
+// NEW: DAILY ACTIVITY LOG
+// (For detailed tracking & immutable past data)
+// ============================================
+
+model DailyActivityLog {
+  id         Int      @id @default(autoincrement())
+  employeeId Int
+  date       DateTime @db.Date
+  taskId     Int
+  metricName String   @db.VarChar(100)
+  actual     Int
+  notes      String?  @db.Text
+  
+  // Profile/Position comment (for recruiters)
+  profileComment String? @db.Text
+  
+  createdAt  DateTime @default(now())
+  
+  // Prevent editing past submissions
+  isEditable Boolean  @default(true)
+  lockedAt   DateTime?
+  
+  // Relations
+  employee Employee @relation("EmployeeActivities", fields: [employeeId], references: [id], onDelete: Cascade)
+  task     Task     @relation("TaskActivities", fields: [taskId], references: [id], onDelete: Cascade)
+  
+  @@unique([employeeId, date, taskId])
+  @@index([employeeId, date])
+  @@index([taskId])
+  @@index([date])
+  @@index([isEditable])
+}

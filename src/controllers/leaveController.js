@@ -1,8 +1,7 @@
-// src/controllers/leaveController.js
+// src/controllers/leaveController.js - UPDATED VERSION
 
 const { PrismaClient } = require('@prisma/client');
 const prisma = require("../lib/prisma");
-
 const paidLeaveService = require('../services/paidLeaveService');
 
 // Get all leave requests
@@ -36,12 +35,16 @@ exports.getAllLeaves = async (req, res, next) => {
             lastName: true,
             employeeId: true,
             department: true,
-            position: true
+            position: true,
+            email: true,
+            phone: true
           }
         }
       },
       orderBy: { appliedDate: 'desc' }
     });
+
+    console.log(`✅ Found ${leaves.length} leave requests`);
 
     res.status(200).json({
       success: true,
@@ -49,6 +52,7 @@ exports.getAllLeaves = async (req, res, next) => {
       data: leaves
     });
   } catch (error) {
+    console.error('❌ Error in getAllLeaves:', error);
     next(error);
   }
 };
@@ -135,7 +139,9 @@ exports.getLeavesByEmployee = async (req, res, next) => {
             id: true,
             firstName: true,
             lastName: true,
-            employeeId: true
+            employeeId: true,
+            department: true,
+            position: true
           }
         }
       }
@@ -154,6 +160,7 @@ exports.getLeavesByEmployee = async (req, res, next) => {
     next(error);
   }
 };
+
 // Create leave request
 exports.createLeave = async (req, res, next) => {
   try {
@@ -165,17 +172,9 @@ exports.createLeave = async (req, res, next) => {
       reason,
       contactDuringLeave,
       addressDuringLeave,
-      isHalfDay = false // Make sure this is properly extracted
+      isHalfDay = false
     } = req.body;
 
-    console.log('Received leave request data:', {
-      empId,
-      type,
-      from,
-      to,
-      isHalfDay,
-      reason
-    });
     // Validate required fields
     if (!empId || !type || !from || !reason) {
       return res.status(400).json({
@@ -184,114 +183,131 @@ exports.createLeave = async (req, res, next) => {
       });
     }
 
-    // Check if employee exists
-    const employee = await prisma.employee.findUnique({
-      where: { id: parseInt(empId) },
-      include: { leaveBalance: true }
+    const fromDate = new Date(from);
+    const toDate = isHalfDay ? fromDate : new Date(to || from);
+
+    // Check for overlapping leaves
+    const overlappingLeaves = await prisma.leaveRequest.findMany({
+      where: {
+        empId: parseInt(empId),
+        status: { in: ['pending', 'approved'] },
+        OR: [
+          {
+            AND: [
+              { from: { lte: toDate } },
+              { to: { gte: fromDate } }
+            ]
+          }
+        ]
+      }
     });
 
-    if (!employee) {
-      return res.status(404).json({
-        success: false,
-        message: 'Employee not found'
-      });
-    }
-
-    // Calculate days based on half day or full day
-    let days = 0;
-    const fromDate = new Date(from);
-    let toDate;
-
-    if (isHalfDay) {
-      days = 0.5;
-      toDate = fromDate; // Same day for half day
-    } else {
-      toDate = new Date(to || from);
-      const timeDiff = toDate.getTime() - fromDate.getTime();
-      days = Math.ceil(timeDiff / (1000 * 60 * 60 * 24)) + 1;
-
-      // Ensure at least 1 day
-      if (days < 1) days = 1;
-    }
-
-    console.log(`📅 Date range: ${fromDate.toDateString()} to ${toDate.toDateString()}, Days: ${days}`);
-
-    if (days <= 0) {
+    if (overlappingLeaves.length > 0) {
       return res.status(400).json({
         success: false,
-        message: 'Invalid date range'
+        message: 'You already have a leave request for this period',
+        overlapping: overlappingLeaves.map(l => ({
+          from: l.from,
+          to: l.to,
+          status: l.status
+        }))
       });
     }
 
-    // Handle different leave types
-    let isPaid = false;
-    let paidDays = 0;
+    // Use transaction for leave creation
+    const leave = await prisma.$transaction(async (tx) => {
+      // Check if employee exists
+      const employee = await tx.employee.findUnique({
+        where: { id: parseInt(empId) },
+        include: { leaveBalance: true }
+      });
 
-    if (type === 'Paid' || type === 'Unpaid') {
-      // Check paid leave availability
-      const paidLeaveCheck = await paidLeaveService.canBePaidLeave(
-        parseInt(empId),
-        days,
-        prisma
-      );
+      if (!employee) {
+        throw new Error('Employee not found');
+      }
 
-      if (type === 'Paid') {
-        if (!paidLeaveCheck.canBePaid && paidLeaveCheck.paidDays === 0) {
-          return res.status(400).json({
-            success: false,
-            message: 'No paid leaves available. Please apply for unpaid leave.'
-          });
+      // Calculate days
+let days = 0;
+if (isHalfDay) {
+  days = 0.5; // FIX: Set to 0.5 for half days, not 0
+} else {
+  const timeDiff = toDate.getTime() - fromDate.getTime();
+  days = Math.ceil(timeDiff / (1000 * 60 * 60 * 24)) + 1;
+  if (days < 1) days = 1;
+}
+
+      // Validate maximum days per request (configurable)
+      const MAX_DAYS_PER_REQUEST = 30;
+      if (days > MAX_DAYS_PER_REQUEST) {
+        throw new Error(`Leave requests cannot exceed ${MAX_DAYS_PER_REQUEST} days`);
+      }
+
+      // Handle different leave types
+      let isPaid = false;
+      let paidDays = 0;
+
+      if (type === 'Paid' || type === 'Unpaid') {
+        const paidLeaveCheck = await paidLeaveService.canBePaidLeave(
+          parseInt(empId),
+          days,
+          tx
+        );
+
+        if (type === 'Paid') {
+          if (!paidLeaveCheck.canBePaid && paidLeaveCheck.paidDays === 0) {
+            throw new Error('No paid leaves available. Please apply for unpaid leave.');
+          }
+          isPaid = true;
+          paidDays = paidLeaveCheck.paidDays;
+        } else {
+          isPaid = false;
+          paidDays = 0;
+        }
+      } else {
+        // Regular leave types
+        const leaveType = type.toLowerCase();
+        const currentBalance = employee.leaveBalance[leaveType];
+
+        if (currentBalance < days) {
+          throw new Error(
+            `Insufficient ${type} leave balance. Available: ${currentBalance} days, Requested: ${days} days`
+          );
         }
         isPaid = true;
-        paidDays = paidLeaveCheck.paidDays;
-      } else {
-        // Unpaid leave
-        isPaid = false;
-        paidDays = 0;
+        paidDays = days;
       }
-    } else {
-      // Regular leave types (Casual, Sick, etc.)
-      const leaveType = type.toLowerCase();
-      const currentBalance = employee.leaveBalance[leaveType];
 
-      if (currentBalance < days) {
-        return res.status(400).json({
-          success: false,
-          message: `Insufficient ${type} leave balance. Available: ${currentBalance} days, Requested: ${days} days`
-        });
+      // Create leave request
+return await tx.leaveRequest.create({
+  data: {
+    empId: parseInt(empId),
+    type,
+    from: fromDate,
+    to: toDate,
+    days, // This will now be 0.5 for half days
+    reason,
+    contactDuringLeave,
+    addressDuringLeave,
+    status: 'pending',
+    isHalfDay,
+    isPaid,
+    paidDays
+  },
+  include: {
+    employee: {
+      select: {
+        id: true,
+        firstName: true,
+        lastName: true,
+        employeeId: true,
+        department: true
       }
-      isPaid = true; // Regular leaves are paid
-      paidDays = days;
     }
-
-    // Create leave request
-    const leave = await prisma.leaveRequest.create({
-      data: {
-        empId: parseInt(empId),
-        type,
-        from: fromDate,
-        to: toDate,
-        days,
-        reason,
-        contactDuringLeave,
-        addressDuringLeave,
-        status: 'pending',
-        isHalfDay,
-        isPaid,
-        paidDays
-      },
-      include: {
-        employee: {
-          select: {
-            id: true,
-            firstName: true,
-            lastName: true,
-            employeeId: true,
-            department: true
-          }
-        }
-      }
+  }
+});
     });
+
+    console.log('✅ Leave request created:', leave);
 
     res.status(201).json({
       success: true,
@@ -299,9 +315,20 @@ exports.createLeave = async (req, res, next) => {
       data: leave
     });
   } catch (error) {
+    console.error('❌ Error in createLeave:', error);
+    
+    if (error.message.includes('already have a leave')) {
+      return res.status(400).json({
+        success: false,
+        message: error.message
+      });
+    }
+    
     next(error);
   }
 };
+
+
 // Update leave request
 exports.updateLeave = async (req, res, next) => {
   try {
@@ -356,6 +383,7 @@ exports.updateLeave = async (req, res, next) => {
   }
 };
 
+// Get paid leave balance
 exports.getPaidLeaveBalance = async (req, res, next) => {
   try {
     const { empId } = req.params;
@@ -402,18 +430,18 @@ exports.getPaidLeaveBalance = async (req, res, next) => {
     res.status(200).json({
       success: true,
       data: {
-        earned: earned,      // Whole number (1, 2, 3...)
-        consumed: consumed,   // Can be decimal (0.5, 1, 1.5...)
-        available: available  // Can be decimal (0.5, 1, 1.5...)
+        earned: earned,
+        consumed: consumed,
+        available: available
       }
     });
   } catch (error) {
-    console.error('Error in getPaidLeaveBalance:', error);
+    console.error('❌ Error in getPaidLeaveBalance:', error);
     next(error);
   }
 };
 
-// Update leave status (approve/reject)
+// Update leave status (approve/reject) - FIXED VERSION
 exports.updateLeaveStatus = async (req, res, next) => {
   try {
     const { id } = req.params;
@@ -426,80 +454,103 @@ exports.updateLeaveStatus = async (req, res, next) => {
       });
     }
 
-    // Get leave request
-    const leave = await prisma.leaveRequest.findUnique({
-      where: { id: parseInt(id) },
-      include: {
-        employee: {
-          include: { leaveBalance: true }
-        }
-      }
-    });
-
-    if (!leave) {
-      return res.status(404).json({
-        success: false,
-        message: 'Leave request not found'
-      });
-    }
-
-    // If approving, deduct from leave balance
-    if (status === 'approved' && leave.status !== 'approved') {
-      const leaveType = leave.type.toLowerCase();
-      const currentBalance = leave.employee.leaveBalance[leaveType];
-
-      if (currentBalance < leave.days) {
-        return res.status(400).json({
-          success: false,
-          message: `Insufficient leave balance`
-        });
-      }
-
-      // Update leave balance
-      await prisma.leaveBalance.update({
-        where: { employeeId: leave.empId },
-        data: {
-          [leaveType]: currentBalance - leave.days
-        }
-      });
-    }
-
-    // If rejecting an approved leave, restore balance
-    if (status === 'rejected' && leave.status === 'approved') {
-      const leaveType = leave.type.toLowerCase();
-      const currentBalance = leave.employee.leaveBalance[leaveType];
-
-      await prisma.leaveBalance.update({
-        where: { employeeId: leave.empId },
-        data: {
-          [leaveType]: currentBalance + leave.days
-        }
-      });
-    }
-
-    // Update leave status
-    const updatedLeave = await prisma.leaveRequest.update({
-      where: { id: parseInt(id) },
-      data: {
-        status,
-        managerNotes,
-        approvedBy: status === 'approved' ? approvedBy : null,
-        approvedDate: status === 'approved' ? new Date() : null,
-        rejectionReason: status === 'rejected' ? rejectionReason : null
-      },
-      include: {
-        employee: {
-          select: {
-            id: true,
-            firstName: true,
-            lastName: true,
-            employeeId: true,
-            department: true,
-            email: true
+    // Use transaction to prevent race conditions
+    const updatedLeave = await prisma.$transaction(async (tx) => {
+      // Get leave request with employee details
+      const leave = await tx.leaveRequest.findUnique({
+        where: { id: parseInt(id) },
+        include: {
+          employee: {
+            include: { leaveBalance: true }
           }
         }
+      });
+
+      if (!leave) {
+        throw new Error('Leave request not found');
       }
+
+      // If approving, check and deduct balance
+      if (status === 'approved' && leave.status !== 'approved') {
+        // For Paid/Unpaid types, check paid leave balance
+        if (leave.type === 'Paid' || leave.type === 'Unpaid') {
+          if (leave.type === 'Paid') {
+            // Re-check balance within transaction
+            const paidLeaveCheck = await paidLeaveService.canBePaidLeave(
+              leave.empId,
+              leave.days,
+              tx // Pass transaction client
+            );
+
+            if (!paidLeaveCheck.canBePaid && paidLeaveCheck.paidDays === 0) {
+              throw new Error('Insufficient paid leave balance');
+            }
+          }
+        } else {
+          // Regular leave types (Casual, Sick, etc.)
+          const leaveType = leave.type.toLowerCase();
+          const currentBalance = leave.employee.leaveBalance[leaveType];
+
+          if (currentBalance < leave.days) {
+            throw new Error(`Insufficient ${leave.type} leave balance`);
+          }
+
+          // Update leave balance within transaction
+          await tx.leaveBalance.update({
+            where: { employeeId: leave.empId },
+            data: {
+              [leaveType]: currentBalance - leave.days
+            }
+          });
+        }
+      }
+
+      // If rejecting an approved leave, restore balance
+      if (status === 'rejected' && leave.status === 'approved') {
+        if (leave.type !== 'Paid' && leave.type !== 'Unpaid') {
+          const leaveType = leave.type.toLowerCase();
+          const currentBalance = leave.employee.leaveBalance[leaveType];
+
+          await tx.leaveBalance.update({
+            where: { employeeId: leave.empId },
+            data: {
+              [leaveType]: currentBalance + leave.days
+            }
+          });
+        }
+      }
+
+      // Update leave status
+      return await tx.leaveRequest.update({
+        where: { id: parseInt(id) },
+        data: {
+          status,
+          managerNotes,
+          approvedBy: status === 'approved' ? (approvedBy || 'Manager') : null,
+          approvedDate: status === 'approved' ? new Date() : null,
+          rejectionReason: status === 'rejected' ? (rejectionReason || managerNotes) : null
+        },
+        include: {
+          employee: {
+            select: {
+              id: true,
+              firstName: true,
+              lastName: true,
+              employeeId: true,
+              department: true,
+              email: true,
+              phone: true
+            }
+          }
+        }
+      });
+    }, {
+      // Transaction options
+      maxWait: 5000, // 5 seconds max wait
+      timeout: 10000, // 10 seconds timeout
     });
+
+    console.log('✅ Leave status updated:', updatedLeave);
 
     res.status(200).json({
       success: true,
@@ -507,6 +558,7 @@ exports.updateLeaveStatus = async (req, res, next) => {
       data: updatedLeave
     });
   } catch (error) {
+    console.error('❌ Error in updateLeaveStatus:', error);
     next(error);
   }
 };
@@ -528,7 +580,7 @@ exports.deleteLeave = async (req, res, next) => {
     }
 
     // If approved leave is being deleted, restore balance
-    if (existingLeave.status === 'approved') {
+    if (existingLeave.status === 'approved' && existingLeave.type !== 'Paid' && existingLeave.type !== 'Unpaid') {
       const employee = await prisma.employee.findUnique({
         where: { id: existingLeave.empId },
         include: { leaveBalance: true }
@@ -549,11 +601,14 @@ exports.deleteLeave = async (req, res, next) => {
       where: { id: parseInt(id) }
     });
 
+    console.log('✅ Leave request deleted:', id);
+
     res.status(200).json({
       success: true,
       message: 'Leave request deleted successfully'
     });
   } catch (error) {
+    console.error('❌ Error in deleteLeave:', error);
     next(error);
   }
 };
@@ -589,6 +644,7 @@ exports.getLeaveStatistics = async (req, res, next) => {
       }
     });
   } catch (error) {
+    console.error('❌ Error in getLeaveStatistics:', error);
     next(error);
   }
 };

@@ -4,6 +4,8 @@ const bcrypt = require('bcrypt');
 
 const prisma = new PrismaClient();
 
+// src/controllers/authController.js
+
 exports.login = async (req, res, next) => {
   try {
     const { email, password } = req.body;
@@ -27,15 +29,58 @@ exports.login = async (req, res, next) => {
       
       if (password === adminPassword) {
         console.log('Admin login successful');
+        
+        // ✅ FIX: Find admin user in database to get their numeric ID
+        let adminUser = await prisma.employee.findFirst({
+          where: {
+            OR: [
+              { email: 'admin@orah.com' },
+              { orgEmail: 'admin@orah.com' },
+              { employeeId: 'ADMIN001' }
+            ]
+          }
+        });
+        
+        // If admin doesn't exist in DB, create them
+        if (!adminUser) {
+          console.log('Admin not found in database, creating...');
+          adminUser = await prisma.employee.create({
+            data: {
+              firstName: 'Admin',
+              lastName: 'User',
+              employeeId: 'ADMIN001',
+              email: 'admin@orah.com',
+              orgEmail: 'admin@orahconsultancy.com',
+              orgPassword: 'admin123',
+              phone: '0000000000',
+              department: 'Management',
+              position: 'Administrator',
+              joinDate: new Date(),
+              birthday: new Date('1990-01-01'),
+              location: 'Ahmedabad',
+              emergencyContact: '0000000000',
+              avatar: 'A',
+              isActive: true
+            }
+          });
+        }
+        
+        console.log('Admin user ID:', adminUser.id);
+        
         return res.status(200).json({
           success: true,
           message: 'Login successful',
           data: {
             role: 'employer',
-            name: 'Admin User',
-            email: email,
-            empId: 'ADMIN001',
-            id: 'ADMIN001',
+            name: `${adminUser.firstName} ${adminUser.lastName}`,
+            email: adminUser.email,
+            orgEmail: adminUser.orgEmail,
+            empId: adminUser.employeeId,
+            employeeId: adminUser.employeeId,
+            id: adminUser.id,  // ✅ Now it's a number from the database!
+            department: adminUser.department,
+            position: adminUser.position,
+            avatar: adminUser.avatar,
             isAdmin: true
           }
         });
@@ -48,9 +93,9 @@ exports.login = async (req, res, next) => {
       }
     }
     
+    // ... rest of the employee login code stays the same
     console.log('Employee login attempt - searching for:', email);
     
-    // Find employee by organization email - use findFirst instead of findUnique
     const employee = await prisma.employee.findFirst({
       where: {
         orgEmail: email,
@@ -73,28 +118,22 @@ exports.login = async (req, res, next) => {
     
     console.log('Employee ID:', employee.id);
     console.log('Employee Name:', `${employee.firstName} ${employee.lastName}`);
-    console.log('Stored password preview:', employee.orgPassword.substring(0, 20) + '...');
     
-    // Check if password is hashed
+    // Check password
     const isPasswordHashed = employee.orgPassword.startsWith('$2');
     console.log('Is password hashed:', isPasswordHashed);
     
     let isPasswordValid = false;
     
     if (isPasswordHashed) {
-      console.log('Comparing with bcrypt...');
       isPasswordValid = await bcrypt.compare(password, employee.orgPassword);
     } else {
-      console.log('Comparing plain text...');
       isPasswordValid = password === employee.orgPassword;
     }
     
     console.log('Password valid:', isPasswordValid);
     
     if (!isPasswordValid) {
-      console.log('❌ Password validation failed');
-      console.log('   Expected:', employee.orgPassword.substring(0, 20) + '...');
-      console.log('   Received:', password);
       return res.status(401).json({
         success: false,
         message: 'Invalid credentials'
@@ -103,7 +142,6 @@ exports.login = async (req, res, next) => {
     
     console.log('✅ Login successful for:', employee.employeeId);
     
-    // Remove password from response
     const { orgPassword, ...sanitizedEmployee } = employee;
     
     res.status(200).json({
@@ -112,6 +150,7 @@ exports.login = async (req, res, next) => {
       data: {
         role: 'employee',
         empId: sanitizedEmployee.employeeId,
+        employeeId: sanitizedEmployee.employeeId,
         id: sanitizedEmployee.id,
         name: `${sanitizedEmployee.firstName} ${sanitizedEmployee.lastName}`,
         email: sanitizedEmployee.orgEmail,
@@ -147,21 +186,44 @@ exports.verifySession = async (req, res, next) => {
     
     // Admin verification
     if (role === 'employer' && (email === 'admin@orah.com' || email === process.env.ADMIN_EMAIL)) {
+      // ✅ FIX: Get admin from database
+      const adminUser = await prisma.employee.findFirst({
+        where: {
+          OR: [
+            { email: 'admin@orah.com' },
+            { orgEmail: 'admin@orah.com' },
+            { employeeId: 'ADMIN001' }
+          ]
+        }
+      });
+      
+      if (!adminUser) {
+        return res.status(401).json({
+          success: false,
+          message: 'Admin user not found'
+        });
+      }
+      
       return res.status(200).json({
         success: true,
         message: 'Session valid',
         data: {
           role: 'employer',
-          name: 'Admin User',
-          email: email,
-          empId: 'ADMIN001',
-          id: 'ADMIN001',
+          name: `${adminUser.firstName} ${adminUser.lastName}`,
+          email: adminUser.email,
+          orgEmail: adminUser.orgEmail,
+          empId: adminUser.employeeId,
+          employeeId: adminUser.employeeId,
+          id: adminUser.id,  // ✅ Numeric ID
+          department: adminUser.department,
+          position: adminUser.position,
+          avatar: adminUser.avatar,
           isAdmin: true
         }
       });
     }
     
-    // Employee verification
+    // Employee verification (stays the same)
     const employee = await prisma.employee.findFirst({
       where: {
         orgEmail: email,
@@ -187,6 +249,7 @@ exports.verifySession = async (req, res, next) => {
       data: {
         role: 'employee',
         empId: sanitizedEmployee.employeeId,
+        employeeId: sanitizedEmployee.employeeId,
         id: sanitizedEmployee.id,
         name: `${sanitizedEmployee.firstName} ${sanitizedEmployee.lastName}`,
         email: sanitizedEmployee.orgEmail,
