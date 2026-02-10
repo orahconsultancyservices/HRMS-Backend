@@ -1,4 +1,4 @@
-// src/routes/attendanceRoutes.js - UPDATED VERSION
+// src/routes/attendanceRoutes.js - UPDATED WITH ALL EMPLOYEES EXPORT
 const express = require('express');
 const router = express.Router();
 
@@ -15,15 +15,14 @@ const {
   getAttendanceStats,
   startBreak,
   endBreak,
-  getEmployeeBreaks
+  getEmployeeBreaks,
+  updateAttendance
 } = require('../controllers/attendanceController');
 
 // Import export controller
 const {
-  exportDailyAttendance,
-  exportWeeklyAttendance,
-  exportMonthlyAttendance
-} = require('../controllers/Attendanceexportcontroller');
+  exportAllEmployeesMonthly
+} = require('../controllers/attendanceExportController');
 
 /**
  * @swagger
@@ -32,10 +31,8 @@ const {
  *   description: Employee attendance management APIs
  */
 
-// Export routes (add these BEFORE the general routes)
-router.get('/employee/:employeeId/export/daily', exportDailyAttendance);
-router.get('/employee/:employeeId/export/weekly', exportWeeklyAttendance);
-router.get('/employee/:employeeId/export/monthly', exportMonthlyAttendance);
+// NEW: Export all employees monthly attendance
+router.get('/export/monthly', exportAllEmployeesMonthly);
 
 /**
  * @swagger
@@ -63,6 +60,15 @@ router.get('/stats', getAttendanceStats);
  *     tags: [Attendance]
  */
 router.get('/:id', getAttendanceById);
+
+/**
+ * @swagger
+ * /api/attendance/{id}:
+ *   put:
+ *     summary: Update attendance record (edit clock in/out times)
+ *     tags: [Attendance]
+ */
+router.put('/:id', updateAttendance);
 
 /**
  * @swagger
