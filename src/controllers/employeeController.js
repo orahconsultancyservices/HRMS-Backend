@@ -6,7 +6,6 @@ const bcrypt = require('bcrypt');
 const prisma = require("../lib/prisma");
 
 // Get all employees
-// Get all employees - return actual passwords for admin
 exports.getAllEmployees = async (req, res, next) => {
   try {
     const { department, position, search } = req.query;
@@ -42,12 +41,20 @@ exports.getAllEmployees = async (req, res, next) => {
       orderBy: { createdAt: 'desc' }
     });
     
-    // Return ACTUAL passwords (not recommended for production)
-    // IMPORTANT: Only do this for trusted admin interfaces!
+    // FIX: Format all dates as UTC strings
+    const formattedEmployees = employees.map(emp => ({
+      ...emp,
+      birthday: emp.birthday ? formatDateUTC(emp.birthday).toISOString() : null,
+      joinDate: emp.joinDate ? formatDateUTC(emp.joinDate).toISOString() : null,
+      leaveDate: emp.leaveDate ? formatDateUTC(emp.leaveDate).toISOString() : null,
+      createdAt: emp.createdAt ? formatDateUTC(emp.createdAt).toISOString() : null,
+      updatedAt: emp.updatedAt ? formatDateUTC(emp.updatedAt).toISOString() : null
+    }));
+    
     res.status(200).json({
       success: true,
       count: employees.length,
-      data: employees // Now includes actual orgPassword
+      data: formattedEmployees
     });
   } catch (error) {
     next(error);
@@ -173,6 +180,19 @@ exports.createEmployee = async (req, res, next) => {
     // Hash password
     const hashedPassword = await bcrypt.hash(orgPassword, 10);
     
+    // FIX: Handle birthday as UTC date without timezone conversion
+    let birthdayDate = null;
+    if (birthday) {
+      birthdayDate = new Date(birthday);
+      // Set to UTC noon to avoid timezone shifting
+      birthdayDate = new Date(Date.UTC(
+        birthdayDate.getUTCFullYear(),
+        birthdayDate.getUTCMonth(),
+        birthdayDate.getUTCDate(),
+        12, 0, 0
+      ));
+    }
+    
     // Create employee with leave balance
     const employee = await prisma.employee.create({
       data: {
@@ -187,7 +207,7 @@ exports.createEmployee = async (req, res, next) => {
         position,
         joinDate: joinDate ? new Date(joinDate) : new Date(),
         leaveDate: leaveDate ? new Date(leaveDate) : null,
-        birthday: birthday ? new Date(birthday) : null,
+        birthday: birthdayDate,
         location,
         emergencyContact,
         avatar: firstName.charAt(0).toUpperCase(),
@@ -215,15 +235,92 @@ exports.createEmployee = async (req, res, next) => {
       message: 'Employee created successfully',
       data: {
         ...sanitizedEmployee,
-        // Return placeholder in response
         orgPassword: '••••••••',
-        // Return the plain text password ONLY on creation so admin knows it
         tempPassword: orgPassword
       }
     });
   } catch (error) {
     next(error);
   }
+};
+
+// Update the updateEmployee function to handle birthdays as UTC
+exports.updateEmployee = async (req, res, next) => {
+  try {
+    const { id } = req.params;
+    const updateData = { ...req.body };
+    
+    // Check if employee exists
+    const existingEmployee = await prisma.employee.findUnique({
+      where: { id: parseInt(id) }
+    });
+    
+    if (!existingEmployee) {
+      return res.status(404).json({
+        success: false,
+        message: 'Employee not found'
+      });
+    }
+    
+    // Handle password update logic
+    if (updateData.orgPassword) {
+      if (updateData.orgPassword === '' || 
+          updateData.orgPassword.includes('•') || 
+          updateData.orgPassword === '••••••••') {
+        delete updateData.orgPassword;
+      }
+    } else {
+      delete updateData.orgPassword;
+    }
+    
+    // Convert date strings to Date objects
+    if (updateData.joinDate) {
+      updateData.joinDate = new Date(updateData.joinDate);
+    }
+    if (updateData.leaveDate) {
+      updateData.leaveDate = new Date(updateData.leaveDate);
+    }
+    
+    // FIX: Handle birthday as UTC date without timezone conversion
+    if (updateData.birthday) {
+      const birthdayDate = new Date(updateData.birthday);
+      updateData.birthday = new Date(Date.UTC(
+        birthdayDate.getUTCFullYear(),
+        birthdayDate.getUTCMonth(),
+        birthdayDate.getUTCDate(),
+        12, 0, 0
+      ));
+    }
+    
+    // Update employee
+    const employee = await prisma.employee.update({
+      where: { id: parseInt(id) },
+      data: updateData,
+      include: {
+        leaveBalance: true
+      }
+    });
+    
+    // Remove password
+    const { orgPassword, ...sanitizedEmployee } = employee;
+    
+    res.status(200).json({
+      success: true,
+      message: 'Employee updated successfully',
+      data: {
+        ...sanitizedEmployee,
+        orgPassword: '••••••••'
+      }
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
+const formatDateUTC = (date) => {
+  if (!date) return null;
+  const d = new Date(date);
+  return new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate()));
 };
 
 // Update employee

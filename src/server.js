@@ -1,5 +1,3 @@
-// server.js - UPDATED WITH TASK ROUTES
-
 const express = require('express');
 const cors = require('cors');
 const dotenv = require('dotenv');
@@ -13,9 +11,13 @@ dotenv.config();
 const app = express();
 
 // Middleware should be added BEFORE routes
+// app.use(cors({
+//   origin: process.env.CLIENT_URL || 'http://localhost:5173',
+//   // credentials: true
+// }));
+
 app.use(cors({
-  origin: process.env.CLIENT_URL || 'http://localhost:5173',
-  // credentials: true
+  origin: '*'
 }));
 
 app.use('/api', (req, res, next) => {
@@ -46,13 +48,13 @@ const errorHandler = require('./middleware/errorHandler');
 app.use(bodyParser.json());
 app.use(bodyParser.urlencoded({ extended: true }));
 
-// API Routes
+
 app.use('/api/auth', authRoutes);
 app.use('/api/employees', employeeRoutes);
 app.use('/api/leaves', leaveRoutes);
 app.use('/api/attendance', attendanceRoutes);
 app.use('/api/birthdays', birthdayRoutes);
-app.use('/api/tasks', taskRoutes); // NEW: Task routes
+app.use('/api/tasks', taskRoutes); 
 
 // Health check endpoint
 app.get('/health', (req, res) => {
@@ -63,7 +65,7 @@ app.get('/health', (req, res) => {
   });
 });
 
-// Root endpoint
+
 app.get('/', (req, res) => {
   res.json({
     message: 'Employee Management System API',
@@ -74,16 +76,16 @@ app.get('/', (req, res) => {
       leaves: '/api/leaves',
       attendance: '/api/attendance',
       birthdays: '/api/birthdays',
-      tasks: '/api/tasks', // NEW
+      tasks: '/api/tasks', 
       health: '/health'
     }
   });
 });
 
-// Error handling middleware (must be last)
+
 app.use(errorHandler);
 
-// 404 handler
+
 app.use((req, res) => {
   res.status(404).json({
     error: 'Not Found',
@@ -91,8 +93,8 @@ app.use((req, res) => {
   });
 });
 
-// Start server
-const PORT = process.env.PORT || 5000;
+
+const PORT = process.env.PORT || process.env.SERVER_PORT || 5000;
 
 app.listen(PORT, () => {
   console.log(`🚀 Server is running on port ${PORT}`);
@@ -100,8 +102,8 @@ app.listen(PORT, () => {
   console.log(`📘 Swagger Docs: http://localhost:${PORT}/api-docs`);
 });
 
-// Handle unhandled promise rejections
+
 process.on('unhandledRejection', (err) => {
   console.error('❌ Unhandled Rejection:', err);
   process.exit(1);
-});
+}); 

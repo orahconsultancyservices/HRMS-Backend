@@ -365,42 +365,40 @@ enum ReportStatus {
 // ============================================
 
 model Task {
-  id             Int            @id @default(autoincrement())
-  title          String         @db.VarChar(255)
-  description    String         @db.Text
-  type           TaskType
-  category       TaskCategory
-  target         Int
-  achieved       Int            @default(0)
-  unit           String         @db.VarChar(50)
-  deadline       DateTime
-  status         TaskStatus     @default(active)
-  assignedDate   DateTime       @default(now())
-  priority       TaskPriority   @default(medium)
-  assignedToId   Int
-  assignedById   Int
-  notes          String?        @db.Text
-  recurring      Boolean        @default(false)
-  recurrence     TaskRecurrence?
-  
-  // NEW: Lock & Adjustment Fields
-  isLocked       Boolean   @default(false)  // Lock after month-end
-  lockDate       DateTime? // When it was locked
-  adjustedBy     Int?      // Who adjusted the target
-  adjustedDate   DateTime? // When target was adjusted
-  originalTarget Int?      // Store original for audit trail
-  comments       String?   @db.Text // Team lead remarks
-  
-  createdAt      DateTime       @default(now())
-  updatedAt      DateTime       @updatedAt
+  id           Int            @id @default(autoincrement())
+  title        String         @db.VarChar(255)
+  description  String         @db.Text
+  type         TaskType
+  category     TaskCategory
+  target       Int
+  achieved     Int            @default(0)
+  unit         String         @db.VarChar(50)
+  deadline     DateTime
+  status       TaskStatus     @default(active)
+  assignedDate DateTime       @default(now())
+  priority     TaskPriority   @default(medium)
+  assignedToId Int
+  assignedById Int
+  notes        String?        @db.Text
+  recurring    Boolean        @default(false)
+  recurrence   TaskRecurrence?
+
+  // Lock & Immutability Fields
+  isLocked       Boolean   @default(false)   // true after month-end close
+  lockDate       DateTime?
+  adjustedBy     Int?
+  adjustedDate   DateTime?
+  originalTarget Int?                         // audit trail when target is changed
+  comments       String?   @db.Text
+
+  createdAt    DateTime       @default(now())
+  updatedAt    DateTime       @updatedAt
 
   // Relations
-  assignedTo   Employee         @relation("AssignedTasks", fields: [assignedToId], references: [id], onDelete: Cascade)
-  assignedBy   Employee         @relation("CreatedTasks", fields: [assignedById], references: [id], onDelete: Cascade)
-  adjuster     Employee?        @relation("TaskAdjustments", fields: [adjustedBy], references: [id])
+  assignedTo   Employee         @relation("AssignedTasks",    fields: [assignedToId], references: [id], onDelete: Cascade)
+  assignedBy   Employee         @relation("CreatedTasks",     fields: [assignedById], references: [id], onDelete: Cascade)
+  adjuster     Employee?        @relation("TaskAdjustments",  fields: [adjustedBy],   references: [id])
   submissions  TaskSubmission[] @relation("TaskSubmissions")
-  
-  // NEW: Daily Activity Relation
   activities   DailyActivityLog[] @relation("TaskActivities")
 
   @@index([assignedToId])
@@ -409,6 +407,7 @@ model Task {
   @@index([deadline])
   @@index([type])
   @@index([isLocked])
+  @@index([category])
 }
 
 enum TaskType {
@@ -448,32 +447,27 @@ enum TaskRecurrence {
 }
 
 model TaskSubmission {
-  id         Int      @id @default(autoincrement())
-  taskId     Int
-  employeeId Int
-  count      Int
-  date       DateTime @default(now())
-  notes      String?  @db.Text
-  
-  // NEW: Profile comment for recruiters managing multiple positions
-  profileComment String? @db.Text // "Applied for: Senior Developer - LinkedIn"
-  
-  verified   Boolean  @default(false)
-  verifiedBy Int?
-  verifiedAt DateTime?
-  createdAt  DateTime @default(now())
-  updatedAt  DateTime @updatedAt
+  id             Int      @id @default(autoincrement())
+  taskId         Int
+  employeeId     Int
+  count          Int
+  date           DateTime @default(now())
+  notes          String?  @db.Text
+  profileComment String?  @db.Text   // "Applied for: Senior Dev @ ABC Corp – LinkedIn"
+  verified       Boolean  @default(false)
+  verifiedBy     Int?
+  verifiedAt     DateTime?
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
 
-  // Relations
-  task     Task     @relation("TaskSubmissions", fields: [taskId], references: [id], onDelete: Cascade)
-  employee Employee @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+  task     Task     @relation("TaskSubmissions", fields: [taskId],     references: [id], onDelete: Cascade)
+  employee Employee @relation(fields: [employeeId], references: [id],  onDelete: Cascade)
 
   @@index([taskId])
   @@index([employeeId])
   @@index([date])
   @@index([verified])
 }
-
 // ============================================
 // NEW: MONTHLY PERFORMANCE SNAPSHOT
 // (Immutable History)

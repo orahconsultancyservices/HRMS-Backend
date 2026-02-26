@@ -1,36 +1,32 @@
 // src/controllers/authController.js
+// UPDATED - Added Team Lead role support
+
 const { PrismaClient } = require('@prisma/client');
 const bcrypt = require('bcrypt');
 
 const prisma = new PrismaClient();
 
-// src/controllers/authController.js
-
 exports.login = async (req, res, next) => {
   try {
     const { email, password } = req.body;
-    
+
     console.log('=== LOGIN ATTEMPT ===');
     console.log('Email:', email);
     console.log('Password provided:', !!password);
-    
-    // Validate input
+
     if (!email || !password) {
       return res.status(400).json({
         success: false,
         message: 'Please provide email and password'
       });
     }
-    
-    // Check if it's an admin login
+
+    // ─── Admin Login ──────────────────────────────────────────────────────
     if (email === process.env.ADMIN_EMAIL || email === 'admin@orah.com') {
       console.log('Admin login attempt');
       const adminPassword = process.env.ADMIN_PASSWORD || 'admin123';
-      
+
       if (password === adminPassword) {
-        console.log('Admin login successful');
-        
-        // ✅ FIX: Find admin user in database to get their numeric ID
         let adminUser = await prisma.employee.findFirst({
           where: {
             OR: [
@@ -40,10 +36,8 @@ exports.login = async (req, res, next) => {
             ]
           }
         });
-        
-        // If admin doesn't exist in DB, create them
+
         if (!adminUser) {
-          console.log('Admin not found in database, creating...');
           adminUser = await prisma.employee.create({
             data: {
               firstName: 'Admin',
@@ -64,9 +58,7 @@ exports.login = async (req, res, next) => {
             }
           });
         }
-        
-        console.log('Admin user ID:', adminUser.id);
-        
+
         return res.status(200).json({
           success: true,
           message: 'Login successful',
@@ -77,7 +69,7 @@ exports.login = async (req, res, next) => {
             orgEmail: adminUser.orgEmail,
             empId: adminUser.employeeId,
             employeeId: adminUser.employeeId,
-            id: adminUser.id,  // ✅ Now it's a number from the database!
+            id: adminUser.id,
             department: adminUser.department,
             position: adminUser.position,
             avatar: adminUser.avatar,
@@ -85,17 +77,13 @@ exports.login = async (req, res, next) => {
           }
         });
       } else {
-        console.log('Admin password mismatch');
-        return res.status(401).json({
-          success: false,
-          message: 'Invalid credentials'
-        });
+        return res.status(401).json({ success: false, message: 'Invalid credentials' });
       }
     }
-    
-    // ... rest of the employee login code stays the same
+
+    // ─── Employee / Team Lead Login ────────────────────────────────────────
     console.log('Employee login attempt - searching for:', email);
-    
+
     const employee = await prisma.employee.findFirst({
       where: {
         orgEmail: email,
@@ -105,50 +93,49 @@ exports.login = async (req, res, next) => {
         leaveBalance: true
       }
     });
-    
+
     console.log('Found employee:', employee ? 'Yes' : 'No');
-    
+
     if (!employee) {
-      console.log('No employee found with orgEmail:', email);
-      return res.status(401).json({
-        success: false,
-        message: 'Invalid credentials'
-      });
+      return res.status(401).json({ success: false, message: 'Invalid credentials' });
     }
-    
-    console.log('Employee ID:', employee.id);
-    console.log('Employee Name:', `${employee.firstName} ${employee.lastName}`);
-    
-    // Check password
+
+    // Verify password
     const isPasswordHashed = employee.orgPassword.startsWith('$2');
-    console.log('Is password hashed:', isPasswordHashed);
-    
     let isPasswordValid = false;
-    
+
     if (isPasswordHashed) {
       isPasswordValid = await bcrypt.compare(password, employee.orgPassword);
     } else {
       isPasswordValid = password === employee.orgPassword;
     }
-    
-    console.log('Password valid:', isPasswordValid);
-    
+
     if (!isPasswordValid) {
-      return res.status(401).json({
-        success: false,
-        message: 'Invalid credentials'
-      });
+      return res.status(401).json({ success: false, message: 'Invalid credentials' });
     }
-    
+
     console.log('✅ Login successful for:', employee.employeeId);
-    
+
+    // ─── Determine Role ────────────────────────────────────────────────────
+    // Team Lead detection: position contains 'team lead', 'tl', or 'lead'
+    const pos = (employee.position || '').toLowerCase();
+    const isTeamLead =
+      pos.includes('team lead') ||
+      pos.includes('team leader') ||
+      pos.includes(' tl') ||
+      pos === 'tl' ||
+      pos.includes('lead recruiter') ||
+      pos.includes('senior lead');
+
+    const role = isTeamLead ? 'teamlead' : 'employee';
+
     const { orgPassword, ...sanitizedEmployee } = employee;
-    
-    res.status(200).json({
+
+    return res.status(200).json({
       success: true,
       message: 'Login successful',
       data: {
-        role: 'employee',
+        role,
         empId: sanitizedEmployee.employeeId,
         employeeId: sanitizedEmployee.employeeId,
         id: sanitizedEmployee.id,
@@ -158,7 +145,8 @@ exports.login = async (req, res, next) => {
         position: sanitizedEmployee.position,
         avatar: sanitizedEmployee.avatar,
         joinDate: sanitizedEmployee.joinDate,
-        leaveBalance: sanitizedEmployee.leaveBalance
+        leaveBalance: sanitizedEmployee.leaveBalance,
+        isTeamLead
       }
     });
   } catch (error) {
@@ -176,17 +164,13 @@ exports.login = async (req, res, next) => {
 exports.verifySession = async (req, res, next) => {
   try {
     const { email, role } = req.body;
-    
+
     if (!email || !role) {
-      return res.status(400).json({
-        success: false,
-        message: 'Email and role are required'
-      });
+      return res.status(400).json({ success: false, message: 'Email and role are required' });
     }
-    
-    // Admin verification
+
+    // Admin
     if (role === 'employer' && (email === 'admin@orah.com' || email === process.env.ADMIN_EMAIL)) {
-      // ✅ FIX: Get admin from database
       const adminUser = await prisma.employee.findFirst({
         where: {
           OR: [
@@ -196,14 +180,11 @@ exports.verifySession = async (req, res, next) => {
           ]
         }
       });
-      
+
       if (!adminUser) {
-        return res.status(401).json({
-          success: false,
-          message: 'Admin user not found'
-        });
+        return res.status(401).json({ success: false, message: 'Admin user not found' });
       }
-      
+
       return res.status(200).json({
         success: true,
         message: 'Session valid',
@@ -214,7 +195,7 @@ exports.verifySession = async (req, res, next) => {
           orgEmail: adminUser.orgEmail,
           empId: adminUser.employeeId,
           employeeId: adminUser.employeeId,
-          id: adminUser.id,  // ✅ Numeric ID
+          id: adminUser.id,
           department: adminUser.department,
           position: adminUser.position,
           avatar: adminUser.avatar,
@@ -222,32 +203,35 @@ exports.verifySession = async (req, res, next) => {
         }
       });
     }
-    
-    // Employee verification (stays the same)
+
+    // Employee / Team Lead
     const employee = await prisma.employee.findFirst({
-      where: {
-        orgEmail: email,
-        isActive: true
-      },
-      include: {
-        leaveBalance: true
-      }
+      where: { orgEmail: email, isActive: true },
+      include: { leaveBalance: true }
     });
-    
+
     if (!employee) {
-      return res.status(401).json({
-        success: false,
-        message: 'Invalid session'
-      });
+      return res.status(401).json({ success: false, message: 'Invalid session' });
     }
-    
+
+    const pos = (employee.position || '').toLowerCase();
+    const isTeamLead =
+      pos.includes('team lead') ||
+      pos.includes('team leader') ||
+      pos.includes(' tl') ||
+      pos === 'tl' ||
+      pos.includes('lead recruiter') ||
+      pos.includes('senior lead');
+
+    const detectedRole = isTeamLead ? 'teamlead' : 'employee';
+
     const { orgPassword, ...sanitizedEmployee } = employee;
-    
-    res.status(200).json({
+
+    return res.status(200).json({
       success: true,
       message: 'Session valid',
       data: {
-        role: 'employee',
+        role: detectedRole,
         empId: sanitizedEmployee.employeeId,
         employeeId: sanitizedEmployee.employeeId,
         id: sanitizedEmployee.id,
@@ -256,7 +240,8 @@ exports.verifySession = async (req, res, next) => {
         department: sanitizedEmployee.department,
         position: sanitizedEmployee.position,
         avatar: sanitizedEmployee.avatar,
-        leaveBalance: sanitizedEmployee.leaveBalance
+        leaveBalance: sanitizedEmployee.leaveBalance,
+        isTeamLead
       }
     });
   } catch (error) {
@@ -268,66 +253,46 @@ exports.verifySession = async (req, res, next) => {
 exports.changePassword = async (req, res, next) => {
   try {
     const { email, oldPassword, newPassword } = req.body;
-    
+
     if (!email || !oldPassword || !newPassword) {
-      return res.status(400).json({
-        success: false,
-        message: 'All fields are required'
-      });
+      return res.status(400).json({ success: false, message: 'All fields are required' });
     }
-    
-    // Find employee
+
     const employee = await prisma.employee.findFirst({
-      where: {
-        orgEmail: email,
-        isActive: true
-      }
+      where: { orgEmail: email, isActive: true }
     });
-    
+
     if (!employee) {
-      return res.status(404).json({
-        success: false,
-        message: 'Employee not found'
-      });
+      return res.status(404).json({ success: false, message: 'Employee not found' });
     }
-    
-    // Verify old password
+
     const isPasswordHashed = employee.orgPassword.startsWith('$2');
     let isOldPasswordValid = false;
-    
+
     if (isPasswordHashed) {
       isOldPasswordValid = await bcrypt.compare(oldPassword, employee.orgPassword);
     } else {
       isOldPasswordValid = oldPassword === employee.orgPassword;
     }
-    
+
     if (!isOldPasswordValid) {
-      return res.status(401).json({
-        success: false,
-        message: 'Current password is incorrect'
-      });
+      return res.status(401).json({ success: false, message: 'Current password is incorrect' });
     }
-    
-    // Hash new password
+
     const hashedPassword = await bcrypt.hash(newPassword, 10);
-    
-    // Update password
+
     await prisma.employee.update({
       where: { id: employee.id },
       data: { orgPassword: hashedPassword }
     });
-    
-    res.status(200).json({
-      success: true,
-      message: 'Password changed successfully'
-    });
+
+    return res.status(200).json({ success: true, message: 'Password changed successfully' });
   } catch (error) {
     console.error('Change password error:', error);
     next(error);
   }
 };
 
-// Cleanup on module unload
 process.on('beforeExit', async () => {
   await prisma.$disconnect();
 });
