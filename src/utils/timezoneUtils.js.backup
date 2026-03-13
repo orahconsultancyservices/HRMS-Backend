@@ -26,28 +26,7 @@ const timezoneUtils = {
    * Use this instead of new Date()
    */
   now: () => {
-    const now = new Date();
-    // Use Intl.DateTimeFormat to get the correct time components
-    const formatter = new Intl.DateTimeFormat('en-US', {
-      timeZone: TIMEZONE,
-      year: 'numeric',
-      month: 'numeric',
-      day: 'numeric',
-      hour: 'numeric',
-      minute: 'numeric',
-      second: 'numeric',
-      hour12: false
-    });
-    
-    const parts = formatter.formatToParts(now);
-    const year = parseInt(parts.find(p => p.type === 'year')?.value || '0');
-    const month = parseInt(parts.find(p => p.type === 'month')?.value || '0') - 1;
-    const day = parseInt(parts.find(p => p.type === 'day')?.value || '0');
-    const hour = parseInt(parts.find(p => p.type === 'hour')?.value || '0');
-    const minute = parseInt(parts.find(p => p.type === 'minute')?.value || '0');
-    const second = parseInt(parts.find(p => p.type === 'second')?.value || '0');
-    
-    return new Date(year, month, day, hour, minute, second);
+    return new Date(new Date().toLocaleString('en-US', { timeZone: TIMEZONE }));
   },
 
   /**
@@ -57,36 +36,8 @@ const timezoneUtils = {
    */
   toEST: (date) => {
     if (!date) return timezoneUtils.now();
-    
-    // Convert input to Date if it's a string
     const inputDate = typeof date === 'string' ? new Date(date) : date;
-    
-    // Check if valid date
-    if (isNaN(inputDate.getTime())) {
-      return timezoneUtils.now();
-    }
-    
-    // Use Intl.DateTimeFormat to get the correct time components in EST
-    const formatter = new Intl.DateTimeFormat('en-US', {
-      timeZone: TIMEZONE,
-      year: 'numeric',
-      month: 'numeric',
-      day: 'numeric',
-      hour: 'numeric',
-      minute: 'numeric',
-      second: 'numeric',
-      hour12: false
-    });
-    
-    const parts = formatter.formatToParts(inputDate);
-    const year = parseInt(parts.find(p => p.type === 'year')?.value || '0');
-    const month = parseInt(parts.find(p => p.type === 'month')?.value || '0') - 1;
-    const day = parseInt(parts.find(p => p.type === 'day')?.value || '0');
-    const hour = parseInt(parts.find(p => p.type === 'hour')?.value || '0');
-    const minute = parseInt(parts.find(p => p.type === 'minute')?.value || '0');
-    const second = parseInt(parts.find(p => p.type === 'second')?.value || '0');
-    
-    return new Date(year, month, day, hour, minute, second);
+    return new Date(inputDate.toLocaleString('en-US', { timeZone: TIMEZONE }));
   },
 
   /**

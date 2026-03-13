@@ -592,6 +592,22 @@ exports.getTodayStatus = async (req, res, next) => {
       }
     });
 
+    // ── FIX: calculate total break minutes for today ──────────────────────────
+    const completedBreaks = await prisma.break.findMany({
+      where: {
+        employeeId: databaseEmployeeId,
+        date: today,
+        status: 'completed'
+      }
+    });
+
+    const totalBreakMinutes = completedBreaks.reduce(
+      (sum, brk) => sum + (brk.duration || 0),
+      0
+    );
+
+    const breakCount = completedBreaks.length + (activeBreak ? 1 : 0);
+
     // Set cache control headers
     res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, private');
     res.setHeader('Pragma', 'no-cache');
@@ -601,7 +617,13 @@ exports.getTodayStatus = async (req, res, next) => {
 
     res.status(200).json({
       success: true,
-      data: attendance || null,
+      data: attendance
+        ? {
+            ...attendance,
+            breaks: totalBreakMinutes,   // total completed break minutes
+            breakCount: breakCount        // number of breaks taken
+          }
+        : null,
       activeBreak: activeBreak || null,
       isOnBreak: !!activeBreak,
       timezone: timezoneUtils.getTimezoneInfo(),
@@ -613,7 +635,6 @@ exports.getTodayStatus = async (req, res, next) => {
     next(error);
   }
 };
-
 /**
  * Mark attendance manually (admin function)
  * Allows admin to create/update attendance records

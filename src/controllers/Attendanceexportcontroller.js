@@ -56,7 +56,7 @@ const formatTime = (dateTime) => {
       timeZone: 'America/New_York',
       hour: '2-digit',
       minute: '2-digit',
-      hour12: false
+      hour12: true          
     });
   } catch (error) {
     return '--:--';

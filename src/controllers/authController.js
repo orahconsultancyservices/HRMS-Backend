@@ -117,17 +117,24 @@ exports.login = async (req, res, next) => {
     console.log('✅ Login successful for:', employee.employeeId);
 
     // ─── Determine Role ────────────────────────────────────────────────────
-    // Team Lead detection: position contains 'team lead', 'tl', or 'lead'
-    const pos = (employee.position || '').toLowerCase();
-    const isTeamLead =
-      pos.includes('team lead') ||
-      pos.includes('team leader') ||
-      pos.includes(' tl') ||
-      pos === 'tl' ||
-      pos.includes('lead recruiter') ||
-      pos.includes('senior lead');
-
-    const role = isTeamLead ? 'teamlead' : 'employee';
+    // Use database role field; fall back to position detection for backward compatibility
+    let role = employee.role || 'employee';
+    
+    if (role === 'employee') {
+      // If role is still default, check position for team lead designation
+      const pos = (employee.position || '').toLowerCase();
+      const isTeamLead =
+        pos.includes('team lead') ||
+        pos.includes('team leader') ||
+        pos.includes(' tl') ||
+        pos === 'tl' ||
+        pos.includes('lead recruiter') ||
+        pos.includes('senior lead');
+      
+      if (isTeamLead) {
+        role = 'teamlead';
+      }
+    }
 
     const { orgPassword, ...sanitizedEmployee } = employee;
 
@@ -146,7 +153,8 @@ exports.login = async (req, res, next) => {
         avatar: sanitizedEmployee.avatar,
         joinDate: sanitizedEmployee.joinDate,
         leaveBalance: sanitizedEmployee.leaveBalance,
-        isTeamLead
+        reportTo: sanitizedEmployee.reportTo,
+        isTeamLead: role === 'teamlead'
       }
     });
   } catch (error) {
@@ -170,7 +178,7 @@ exports.verifySession = async (req, res, next) => {
     }
 
     // Admin
-    if (role === 'employer' && (email === 'admin@orah.com' || email === process.env.ADMIN_EMAIL)) {
+    if ((role === 'employer' || role === 'admin') && (email === 'admin@orah.com' || email === process.env.ADMIN_EMAIL)) {
       const adminUser = await prisma.employee.findFirst({
         where: {
           OR: [
@@ -214,16 +222,22 @@ exports.verifySession = async (req, res, next) => {
       return res.status(401).json({ success: false, message: 'Invalid session' });
     }
 
-    const pos = (employee.position || '').toLowerCase();
-    const isTeamLead =
-      pos.includes('team lead') ||
-      pos.includes('team leader') ||
-      pos.includes(' tl') ||
-      pos === 'tl' ||
-      pos.includes('lead recruiter') ||
-      pos.includes('senior lead');
-
-    const detectedRole = isTeamLead ? 'teamlead' : 'employee';
+    let dbRole = employee.role || 'employee';
+    
+    if (dbRole === 'employee') {
+      const pos = (employee.position || '').toLowerCase();
+      const isTeamLead =
+        pos.includes('team lead') ||
+        pos.includes('team leader') ||
+        pos.includes(' tl') ||
+        pos === 'tl' ||
+        pos.includes('lead recruiter') ||
+        pos.includes('senior lead');
+      
+      if (isTeamLead) {
+        dbRole = 'teamlead';
+      }
+    }
 
     const { orgPassword, ...sanitizedEmployee } = employee;
 
@@ -231,7 +245,7 @@ exports.verifySession = async (req, res, next) => {
       success: true,
       message: 'Session valid',
       data: {
-        role: detectedRole,
+        role: dbRole,
         empId: sanitizedEmployee.employeeId,
         employeeId: sanitizedEmployee.employeeId,
         id: sanitizedEmployee.id,
@@ -240,6 +254,8 @@ exports.verifySession = async (req, res, next) => {
         department: sanitizedEmployee.department,
         position: sanitizedEmployee.position,
         avatar: sanitizedEmployee.avatar,
+        reportTo: sanitizedEmployee.reportTo,
+        isTeamLead: dbRole === 'teamlead',
         leaveBalance: sanitizedEmployee.leaveBalance,
         isTeamLead
       }

@@ -1,25 +1,40 @@
 const express = require('express');
 const cors = require('cors');
 const dotenv = require('dotenv');
-const bodyParser = require('body-parser');
 const swaggerUi = require('swagger-ui-express');
 const swaggerSpec = require('./config/swagger');
 
-// Load environment variables
+// Load environment variables FIRST
 dotenv.config();
 
 const app = express();
 
-// Middleware should be added BEFORE routes
-// app.use(cors({
-//   origin: process.env.CLIENT_URL || 'http://localhost:5173',
-//   // credentials: true
-// }));
-
+// ─── 1. CORS ──────────────────────────────────────────────────────────────────
 app.use(cors({
-  origin: '*'
+  origin: [
+    'https://hrms-frontend-624104167591.asia-southeast1.run.app',
+    'http://localhost:5173',  // for local development
+    'http://localhost:5173',  // for Vite local development
+  ],
+  credentials: true,
+  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS', 'HEAD', 'PATCH'],
+  allowedHeaders: [
+    'Content-Type',
+    'Authorization',
+    'x-user',
+    'X-Requested-With',
+    'Cache-Control',
+    'Pragma',
+    'Expires'
+  ],
+  optionsSuccessStatus: 204
 }));
 
+// ─── 2. Body parsers (ONCE, BEFORE routes) ────────────────────────────────────
+app.use(express.json());
+app.use(express.urlencoded({ extended: true }));
+
+// ─── 3. Cache-control header for all /api routes ──────────────────────────────
 app.use('/api', (req, res, next) => {
   res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, private');
   res.setHeader('Pragma', 'no-cache');
@@ -27,44 +42,46 @@ app.use('/api', (req, res, next) => {
   next();
 });
 
-app.use(express.json());
-app.use(express.urlencoded({ extended: true }));
-
-// Swagger Docs
+// ─── 4. Swagger ───────────────────────────────────────────────────────────────
 app.use('/api-docs', swaggerUi.serve, swaggerUi.setup(swaggerSpec));
 
-// Import routes
-const authRoutes = require('./routes/authRoutes');
-const employeeRoutes = require('./routes/employeeRoutes');
-const leaveRoutes = require('./routes/leaveRoutes');
-const attendanceRoutes = require('./routes/attendanceRoutes');
-const birthdayRoutes = require('./routes/birthdayRoutes');
-const taskRoutes = require('./routes/taskRoutes'); // NEW: Task routes
+// ─── 5. Auth middleware (safe — won't crash on DB error) ──────────────────────
+const { extractUser } = require('./middleware/authMiddleware');
 
-// Import middleware
-const errorHandler = require('./middleware/errorHandler');
-
-// Additional body parser middleware
-app.use(bodyParser.json());
-app.use(bodyParser.urlencoded({ extended: true }));
-
-
-app.use('/api/auth', authRoutes);
-app.use('/api/employees', employeeRoutes);
-app.use('/api/leaves', leaveRoutes);
-app.use('/api/attendance', attendanceRoutes);
-app.use('/api/birthdays', birthdayRoutes);
-app.use('/api/tasks', taskRoutes); 
-
-// Health check endpoint
-app.get('/health', (req, res) => {
-  res.status(200).json({
-    status: 'OK',
-    message: 'Server is running',
-    timestamp: new Date().toISOString()
-  });
+app.use(async (req, res, next) => {
+  try {
+    await extractUser(req, res, next);
+  } catch (err) {
+    console.error('⚠️  extractUser threw unexpectedly:', err.message);
+    next(); // don't block the request — just continue without req.user
+  }
 });
 
+// ─── 6. Routes ────────────────────────────────────────────────────────────────
+const authRoutes           = require('./routes/authRoutes');
+const employeeRoutes       = require('./routes/employeeRoutes');
+const leaveRoutes          = require('./routes/leaveRoutes');
+const attendanceRoutes     = require('./routes/attendanceRoutes');
+const birthdayRoutes       = require('./routes/birthdayRoutes');
+const taskRoutes           = require('./routes/taskRoutes');
+const departmentRoutes     = require('./routes/departmentRoutes');
+const performanceRoutes    = require('./routes/performanceRoutes');
+const taskAssignmentRoutes = require('./routes/taskAssignmentRoutes');
+
+app.use('/api/auth',            authRoutes);
+app.use('/api/employees',       employeeRoutes);
+app.use('/api/leaves',          leaveRoutes);
+app.use('/api/attendance',      attendanceRoutes);
+app.use('/api/birthdays',       birthdayRoutes);
+app.use('/api/tasks',           taskRoutes);
+app.use('/api/departments',     departmentRoutes);
+app.use('/api/performance',     performanceRoutes);
+app.use('/api/task-assignment', taskAssignmentRoutes);
+
+// ─── 7. Health / root ─────────────────────────────────────────────────────────
+app.get('/health', (req, res) => {
+  res.status(200).json({ status: 'OK', timestamp: new Date().toISOString() });
+});
 
 app.get('/', (req, res) => {
   res.json({
@@ -76,16 +93,17 @@ app.get('/', (req, res) => {
       leaves: '/api/leaves',
       attendance: '/api/attendance',
       birthdays: '/api/birthdays',
-      tasks: '/api/tasks', 
+      tasks: '/api/tasks',
       health: '/health'
     }
   });
 });
 
-
+// ─── 8. Error handler (BEFORE 404 catch-all) ──────────────────────────────────
+const errorHandler = require('./middleware/errorHandler');
 app.use(errorHandler);
 
-
+// ─── 9. 404 catch-all (LAST) ──────────────────────────────────────────────────
 app.use((req, res) => {
   res.status(404).json({
     error: 'Not Found',
@@ -93,17 +111,17 @@ app.use((req, res) => {
   });
 });
 
-
+// ─── 10. Start server ─────────────────────────────────────────────────────────
 const PORT = process.env.PORT || process.env.SERVER_PORT || 5000;
+// const PORT = process.env.PORT || process.env.SERVER_PORT || 8080;
 
-app.listen(PORT, () => {
-  console.log(`🚀 Server is running on port ${PORT}`);
+app.listen(PORT, '0.0.0.0', () => {  // ✅ Explicit 0.0.0.0 binding for Cloud Run
+  console.log(`🚀 Server running on port ${PORT}`);
   console.log(`📝 Environment: ${process.env.NODE_ENV || 'development'}`);
-  console.log(`📘 Swagger Docs: http://localhost:${PORT}/api-docs`);
+  console.log(`📘 Swagger: http://localhost:${PORT}/api-docs`);
 });
-
 
 process.on('unhandledRejection', (err) => {
   console.error('❌ Unhandled Rejection:', err);
   process.exit(1);
-}); 
+});

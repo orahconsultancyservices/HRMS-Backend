@@ -27,6 +27,10 @@ model Employee {
   departmentId     Int?
   designationId    Int?
   
+  // NEW: Role & Team Lead Assignment
+  role             String    @default("employee") @db.VarChar(50) // admin, teamlead, employee
+  reportTo         Int?                                            // Team Lead ID managing this employee
+  
   // Existing fields
   department       String    @db.VarChar(100)  // Keep for backward compatibility
   position         String    @db.VarChar(100)  // Keep for backward compatibility
@@ -43,6 +47,10 @@ model Employee {
   // NEW: Department & Designation Relations
   dept             Department?  @relation("EmployeeDepartment", fields: [departmentId], references: [id])
   designation      Designation? @relation("EmployeeDesignation", fields: [designationId], references: [id])
+
+  // NEW: Team Lead Relations
+  teamLead         Employee?    @relation("TeamLeadMembers", fields: [reportTo], references: [id])
+  teamMembers      Employee[]   @relation("TeamLeadMembers")
 
   // Existing Relations
   leaveBalance     LeaveBalance?
@@ -69,6 +77,8 @@ model Employee {
 
   @@index([departmentId])
   @@index([designationId])
+  @@index([reportTo])
+  @@index([role])
   @@index([position])
   @@index([employeeId])
 }
