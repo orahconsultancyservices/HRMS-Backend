@@ -12,7 +12,7 @@ const app = express();
 // ─── 1. CORS ──────────────────────────────────────────────────────────────────
 app.use(cors({
   origin: [
-    'https://hrms-frontend-624104167591.asia-southeast1.run.app',
+    'https://hrms-frontend-624104167591.us-central1.run.app',
     'http://localhost:5173',  // for local development
     'http://localhost:5173',  // for Vite local development
   ],
@@ -112,8 +112,8 @@ app.use((req, res) => {
 });
 
 // ─── 10. Start server ─────────────────────────────────────────────────────────
-const PORT = process.env.PORT || process.env.SERVER_PORT || 5000;
-// const PORT = process.env.PORT || process.env.SERVER_PORT || 8080;
+// const PORT = process.env.PORT || process.env.SERVER_PORT || 5000;
+const PORT = process.env.PORT || process.env.SERVER_PORT || 8080;
 
 app.listen(PORT, '0.0.0.0', () => {  // ✅ Explicit 0.0.0.0 binding for Cloud Run
   console.log(`🚀 Server running on port ${PORT}`);
