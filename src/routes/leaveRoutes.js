@@ -22,12 +22,12 @@ const {
 
 router.get('/', getAllLeaves);
 router.get('/statistics', getLeaveStatistics);
-router.get('/:id', getLeaveById);
+router.get('/employee/:empId/paid-balance', getPaidLeaveBalance);
 router.get('/employee/:empId', getLeavesByEmployee);
+router.get('/:id', getLeaveById);
 router.post('/', createLeave);
 router.put('/:id', updateLeave);
 router.patch('/:id/status', updateLeaveStatus);
 router.delete('/:id', deleteLeave);
-router.get('/employee/:empId/paid-balance', getPaidLeaveBalance);
 
 module.exports = router;

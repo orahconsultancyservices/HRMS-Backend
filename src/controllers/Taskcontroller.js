@@ -2,6 +2,7 @@
 // COMPLETE IMPLEMENTATION - Full KPI Task Management Controller
 
 const prisma = require("../lib/prisma");
+const { getAccessibleDepartments } = require('../utils/departmentAccess');
 
 // ============================================
 // GET ALL TASKS
@@ -10,7 +11,22 @@ exports.getAllTasks = async (req, res, next) => {
   try {
     const { type, status, category, assignedTo, assignedBy, search } = req.query;
     
+        // ── NEW: dept-scoped filtering via x-user header ──────────────────
+    const reqUser = req.user; // populated by extractUser middleware
     const where = {};
+
+    const scopedDepartments = getAccessibleDepartments(reqUser);
+    if (scopedDepartments !== null) {
+      if (reqUser?.role === 'employee') {
+        where.assignedToId = reqUser.id;
+      } else {
+        const scopedEmployees = await prisma.employee.findMany({
+          where: { department: { in: scopedDepartments }, isActive: true },
+          select: { id: true }
+        });
+        where.assignedToId = { in: scopedEmployees.map((employee) => employee.id) };
+      }
+    }
     if (type && type !== 'all')       where.type     = type;
     if (status && status !== 'all')   where.status   = status;
     if (category && category !== 'all') where.category = category;
@@ -87,6 +103,16 @@ exports.getTaskById = async (req, res, next) => {
     
     if (!task) {
       return res.status(404).json({ success: false, message: 'Task not found' });
+    }
+
+    const scopedDepartments = getAccessibleDepartments(req.user);
+    if (scopedDepartments !== null) {
+      if (req.user?.role === 'employee' && task.assignedToId !== req.user.id) {
+        return res.status(403).json({ success: false, message: 'You can only view your own tasks' });
+      }
+      if (req.user?.role !== 'employee' && !scopedDepartments.includes(task.assignedTo.department)) {
+        return res.status(403).json({ success: false, message: 'No access to this department task' });
+      }
     }
     
     res.status(200).json({ success: true, data: task });
@@ -635,9 +661,17 @@ exports.lockTask = async (req, res, next) => {
 exports.getTeamPerformance = async (req, res, next) => {
   try {
     const { month, year, department } = req.query;
-
+    const scopedDepartments = getAccessibleDepartments(req.user);
     const employeeWhere = { isActive: true };
-    if (department) employeeWhere.department = department;
+    if (department) {
+      employeeWhere.department = department;
+    } else if (scopedDepartments !== null) {
+      if (req.user?.role === 'employee') {
+        employeeWhere.id = req.user.id;
+      } else {
+        employeeWhere.department = { in: scopedDepartments };
+      }
+    }
 
     const employees = await prisma.employee.findMany({
       where: employeeWhere,

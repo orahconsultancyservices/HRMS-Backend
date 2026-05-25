@@ -2,6 +2,7 @@
 // Performance Management & Monthly Snapshot Controller
 
 const prisma = require("../lib/prisma");
+const { getAccessibleDepartments } = require('../utils/departmentAccess');
 
 // ============================================
 // DAILY ACTIVITY LOG
@@ -14,6 +15,20 @@ exports.getDailyActivities = async (req, res, next) => {
     const { startDate, endDate, metricName } = req.query;
 
     const where = { employeeId: parseInt(employeeId) };
+    const scopedDepartments = getAccessibleDepartments(req.user);
+
+    if (scopedDepartments !== null) {
+      const scopedEmployee = await prisma.employee.findUnique({
+        where: { id: parseInt(employeeId) },
+        select: { department: true }
+      });
+      if (!scopedEmployee || !scopedDepartments.includes(scopedEmployee.department)) {
+        return res.status(403).json({
+          success: false,
+          message: 'No access to this department activity'
+        });
+      }
+    }
     
     if (startDate && endDate) {
       where.date = {
@@ -179,6 +194,20 @@ exports.getMonthlyPerformance = async (req, res, next) => {
     const { year, month } = req.query;
 
     const where = { employeeId: parseInt(employeeId) };
+    const scopedDepartments = getAccessibleDepartments(req.user);
+
+    if (scopedDepartments !== null) {
+      const scopedEmployee = await prisma.employee.findUnique({
+        where: { id: parseInt(employeeId) },
+        select: { department: true }
+      });
+      if (!scopedEmployee || !scopedDepartments.includes(scopedEmployee.department)) {
+        return res.status(403).json({
+          success: false,
+          message: 'No access to this department performance'
+        });
+      }
+    }
     
     if (year && month) {
       where.year = parseInt(year);
@@ -668,6 +697,7 @@ exports.getTeamPerformanceSummary = async (req, res, next) => {
 exports.getCompanyPerformance = async (req, res, next) => {
   try {
     const { year, month, departmentId } = req.query;
+    const scopedDepartments = getAccessibleDepartments(req.user);
 
     const where = {};
     if (year && month) {
@@ -676,6 +706,17 @@ exports.getCompanyPerformance = async (req, res, next) => {
     }
     if (departmentId) {
       where.departmentId = parseInt(departmentId);
+    }
+    if (scopedDepartments !== null) {
+      if (req.user?.role === 'employee') {
+        where.employeeId = req.user.id;
+      } else {
+        const scopedEmployees = await prisma.employee.findMany({
+          where: { department: { in: scopedDepartments }, isActive: true },
+          select: { id: true }
+        });
+        where.employeeId = { in: scopedEmployees.map((employee) => employee.id) };
+      }
     }
 
     const performances = await prisma.monthlyPerformance.findMany({

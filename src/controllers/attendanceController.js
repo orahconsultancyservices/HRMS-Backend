@@ -66,9 +66,9 @@ const calculateBreakTimeForRecords = async (attendanceRecords) => {
           status: 'completed'
         }
       });
-      
+
       const totalBreakMinutes = breaks.reduce((sum, brk) => sum + (brk.duration || 0), 0);
-      
+
       return {
         ...record,
         breaks: totalBreakMinutes
@@ -82,13 +82,13 @@ const calculateBreakTimeForRecords = async (attendanceRecords) => {
  */
 const calculateWorkHours = (checkIn, checkOut, breakMinutes = 0) => {
   if (!checkIn || !checkOut) return 0;
-  
+
   const diffMs = new Date(checkOut) - new Date(checkIn);
   let hours = diffMs / (1000 * 60 * 60);
-  
+
   // Subtract break time
   hours -= breakMinutes / 60;
-  
+
   return Math.max(0, parseFloat(hours.toFixed(2)));
 };
 
@@ -97,17 +97,17 @@ const calculateWorkHours = (checkIn, checkOut, breakMinutes = 0) => {
  */
 const determineStatus = (checkIn, totalHours = 0) => {
   if (!checkIn) return 'absent';
-  
+
   const checkInEST = timezoneUtils.toEST(checkIn);
   const hour = checkInEST.getHours();
   const minute = checkInEST.getMinutes();
-  
+
   // Late if after 9:30 AM
   const isLate = hour > 9 || (hour === 9 && minute > 30);
-  
+
   // Half day if less than 4 hours worked
   const isHalfDay = totalHours > 0 && totalHours < 4;
-  
+
   if (isHalfDay) return 'half_day';
   if (isLate) return 'late';
   return 'present';
@@ -151,6 +151,20 @@ exports.getAllAttendance = async (req, res, next) => {
     // Apply filters
     if (employeeId && employeeId !== 'all') {
       where.employeeId = parseInt(employeeId);
+    }
+
+    if (req.user && req.user.role !== 'employer') {
+      const accessibleDepts = [req.user.department,
+      ...(req.user.accessPermissions || [])
+        .filter(p => p.targetType === 'department')
+        .map(p => p.targetName)
+      ].filter(Boolean);
+
+      if (req.user.role === 'employee') {
+        where.employeeId = req.user.id;
+      } else {
+        where.employee = { department: { in: accessibleDepts } };
+      }
     }
 
     if (department && department !== 'all') {
@@ -619,10 +633,10 @@ exports.getTodayStatus = async (req, res, next) => {
       success: true,
       data: attendance
         ? {
-            ...attendance,
-            breaks: totalBreakMinutes,   // total completed break minutes
-            breakCount: breakCount        // number of breaks taken
-          }
+          ...attendance,
+          breaks: totalBreakMinutes,   // total completed break minutes
+          breakCount: breakCount        // number of breaks taken
+        }
         : null,
       activeBreak: activeBreak || null,
       isOnBreak: !!activeBreak,

@@ -1,5 +1,5 @@
 // src/routes/departmentRoutes.js
-// Department & Designation Management Routes
+// Mounted at /api/departments — paths here are relative (no extra /departments prefix)
 
 const express = require('express');
 const router = express.Router();
@@ -20,30 +20,26 @@ const {
 } = require('../controllers/departmentController');
 
 // ============================================
-// DEPARTMENT ROUTES
-// ============================================
-
-router.get('/departments', getAllDepartments);
-router.get('/departments/:id', getDepartmentById);
-router.post('/departments', createDepartment);
-router.put('/departments/:id', updateDepartment);
-
-// ============================================
-// DESIGNATION ROUTES
+// DESIGNATION & KPI ROUTES (before /:id)
 // ============================================
 
 router.get('/designations', getAllDesignations);
+router.get('/designations/:designationId/kpis', getDefaultKPIs);
 router.get('/designations/:id', getDesignationById);
 router.post('/designations', createDesignation);
 router.put('/designations/:id', updateDesignation);
 
-// ============================================
-// DEFAULT KPI ROUTES
-// ============================================
-
-router.get('/designations/:designationId/kpis', getDefaultKPIs);
 router.post('/kpis', createDefaultKPI);
 router.put('/kpis/:id', updateDefaultKPI);
 router.delete('/kpis/:id', deleteDefaultKPI);
+
+// ============================================
+// DEPARTMENT ROUTES
+// ============================================
+
+router.get('/', getAllDepartments);
+router.post('/', createDepartment);
+router.get('/:id', getDepartmentById);
+router.put('/:id', updateDepartment);
 
 module.exports = router;

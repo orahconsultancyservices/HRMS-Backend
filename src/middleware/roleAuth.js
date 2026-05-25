@@ -1,5 +1,5 @@
 // src/middleware/roleAuth.js
-// Role-based access control middleware
+// Enhanced Role-based access control middleware for hierarchical organization
 
 const prisma = require("../lib/prisma");
 
@@ -9,7 +9,7 @@ const prisma = require("../lib/prisma");
 
 /**
  * Middleware to verify user role and permissions
- * Expects user info in req.user (set by auth middleware)
+ * Supports hierarchical access: admin > manager > teamlead > employee
  */
 const authorize = (allowedRoles = []) => {
   return async (req, res, next) => {
@@ -33,12 +33,21 @@ const authorize = (allowedRoles = []) => {
         });
       }
 
-      // Fetch full user from database for scoping
+      // Fetch full user from database for hierarchical scoping
       const user = await prisma.employee.findUnique({
         where: { id: parseInt(userId) },
         include: {
+          dept: {
+            select: { id: true, name: true, managerId: true }
+          },
+          directReports: {
+            select: { id: true, role: true, departmentId: true }
+          },
           teamMembers: {
             select: { id: true }
+          },
+          managedDepartment: {
+            select: { id: true, name: true }
           }
         }
       });
@@ -50,7 +59,7 @@ const authorize = (allowedRoles = []) => {
         });
       }
 
-      // Store user info in request for use in controllers
+      // Store enhanced user info in request for use in controllers
       req.user = {
         id: user.id,
         name: `${user.firstName} ${user.lastName}`,
@@ -59,7 +68,13 @@ const authorize = (allowedRoles = []) => {
         departmentId: user.departmentId,
         designationId: user.designationId,
         reportTo: user.reportTo,
-        teamMemberIds: user.teamMembers.map(m => m.id)
+        managesDepartment: user.managesDepartment,
+        department: user.dept,
+        directReports: user.directReports,
+        teamMemberIds: user.teamMembers.map(m => m.id),
+        // Hierarchical access flags
+        isDepartmentManager: user.role === 'manager' && user.managesDepartment,
+        isTeamLead: user.role === 'teamlead'
       };
 
       next();
@@ -74,8 +89,24 @@ const authorize = (allowedRoles = []) => {
 };
 
 // ============================================
-// SCOPE HELPERS
+// ENHANCED SCOPE HELPERS FOR HIERARCHICAL ACCESS
 // ============================================
+
+/**
+ * Get department members for a department manager
+ */
+const getDepartmentMemberIds = async (departmentId) => {
+  try {
+    const members = await prisma.employee.findMany({
+      where: { departmentId, isActive: true },
+      select: { id: true, role: true }
+    });
+    return members;
+  } catch (error) {
+    console.error('Error fetching department members:', error);
+    return [];
+  }
+};
 
 /**
  * Get team member IDs for a team lead
@@ -110,9 +141,34 @@ const isEmployeeUnderTeamLead = async (employeeId, teamLeadId) => {
 };
 
 /**
- * Check if user can view/edit a specific employee's data
+ * Check if employee is in a department managed by the manager
+ */
+const isEmployeeInManagedDepartment = async (employeeId, managerId) => {
+  try {
+    const manager = await prisma.employee.findUnique({
+      where: { id: managerId },
+      select: { managesDepartment: true }
+    });
+    
+    if (!manager?.managesDepartment) return false;
+    
+    const employee = await prisma.employee.findUnique({
+      where: { id: employeeId },
+      select: { departmentId: true }
+    });
+    
+    return employee?.departmentId === manager.managesDepartment;
+  } catch (error) {
+    console.error('Error checking department membership:', error);
+    return false;
+  }
+};
+
+/**
+ * Enhanced access control for hierarchical organization
  * Admin: can access anyone
- * TeamLead: can only access their team members
+ * Manager: can access anyone in their department
+ * TeamLead: can access their team members
  * Employee: can only access themselves
  */
 const canAccessEmployee = async (userId, targetEmployeeId, userRole) => {
@@ -124,6 +180,11 @@ const canAccessEmployee = async (userId, targetEmployeeId, userRole) => {
   // Employee can only access themselves
   if (userRole === 'employee') return userId === targetEmployeeId;
 
+  // Manager can access anyone in their department
+  if (userRole === 'manager') {
+    return await isEmployeeInManagedDepartment(targetEmployeeId, userId);
+  }
+
   // Team Lead can only access their team members
   if (userRole === 'teamlead') {
     return await isEmployeeUnderTeamLead(targetEmployeeId, userId);
@@ -132,9 +193,62 @@ const canAccessEmployee = async (userId, targetEmployeeId, userRole) => {
   return false;
 };
 
+/**
+ * Get accessible employees based on user role and hierarchy
+ */
+const getAccessibleEmployees = async (userId, userRole) => {
+  try {
+    switch (userRole) {
+      case 'admin':
+        // Admin can see all active employees
+        return await prisma.employee.findMany({
+          where: { isActive: true },
+          select: { id: true, firstName: true, lastName: true, role: true, departmentId: true }
+        });
+      
+      case 'manager':
+        // Manager can see all employees in their department
+        const manager = await prisma.employee.findUnique({
+          where: { id: userId },
+          select: { managesDepartment: true }
+        });
+        
+        if (!manager?.managesDepartment) return [];
+        
+        return await prisma.employee.findMany({
+          where: { departmentId: manager.managesDepartment, isActive: true },
+          select: { id: true, firstName: true, lastName: true, role: true, departmentId: true }
+        });
+      
+      case 'teamlead':
+        // Team lead can see their direct reports
+        return await prisma.employee.findMany({
+          where: { reportTo: userId, isActive: true },
+          select: { id: true, firstName: true, lastName: true, role: true, departmentId: true }
+        });
+      
+      case 'employee':
+        // Employee can only see themselves
+        return await prisma.employee.findMany({
+          where: { id: userId, isActive: true },
+          select: { id: true, firstName: true, lastName: true, role: true, departmentId: true }
+        });
+      
+      default:
+        return [];
+    }
+  } catch (error) {
+    console.error('Error fetching accessible employees:', error);
+    return [];
+  }
+};
+
 module.exports = {
   authorize,
+  getDepartmentMemberIds,
   getTeamMemberIds,
   isEmployeeUnderTeamLead,
-  canAccessEmployee
+  isEmployeeInManagedDepartment,
+  canAccessEmployee,
+  getAccessibleEmployees
 };

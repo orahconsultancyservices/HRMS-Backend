@@ -10,9 +10,27 @@ const prisma = require("../lib/prisma");
 // Get all departments
 exports.getAllDepartments = async (req, res, next) => {
   try {
+    // ── 1. Fetch departments with FK-linked employees ─────────────────────
     const departments = await prisma.department.findMany({
       where: { isActive: true },
       include: {
+        employees: {
+          where: { isActive: true },
+          select: {
+            id: true,
+            firstName: true,
+            lastName: true,
+            email: true,
+            role: true,
+            position: true,
+            reportTo: true,
+            teamLeadId: true,
+            managesDepartment: true,
+            avatar: true,
+            department: true,
+            departmentId: true,
+          }
+        },
         designations: {
           where: { isActive: true },
           include: {
@@ -29,10 +47,44 @@ exports.getAllDepartments = async (req, res, next) => {
       orderBy: { name: 'asc' }
     });
 
+    // ── 2. Fetch employees without departmentId (legacy string-only) ──────
+    const legacyEmployees = await prisma.employee.findMany({
+      where: { isActive: true, departmentId: null },
+      select: {
+        id: true,
+        firstName: true,
+        lastName: true,
+        email: true,
+        role: true,
+        position: true,
+        reportTo: true,
+        teamLeadId: true,
+        managesDepartment: true,
+        avatar: true,
+        department: true,
+        departmentId: true,
+      }
+    });
+
+    // ── 3. Merge legacy employees into departments via string match ────────
+    const result = departments.map(dept => {
+      const fkIds = new Set(dept.employees.map(e => e.id));
+      const stringMatched = legacyEmployees.filter(
+        e => (e.department || '').trim().toLowerCase() === dept.name.trim().toLowerCase()
+          && !fkIds.has(e.id)
+      );
+      const combined = [...dept.employees, ...stringMatched];
+      return {
+        ...dept,
+        employees: combined,
+        employeeCount: combined.length,
+      };
+    });
+
     res.status(200).json({
       success: true,
-      count: departments.length,
-      data: departments
+      count: result.length,
+      data: result
     });
   } catch (error) {
     next(error);
@@ -147,19 +199,19 @@ exports.updateDepartment = async (req, res, next) => {
 
     // Check for duplicate name/code (excluding current department)
     if (name || code) {
-      const duplicate = await prisma.department.findFirst({
+      const orConditions = [];
+      if (name) orConditions.push({ name: name.trim() });
+      if (code) orConditions.push({ code: code.trim().toUpperCase() });
+
+      const foundDuplicate = await prisma.department.findFirst({
         where: {
           AND: [
             { id: { not: parseInt(id) } },
-            { OR: [] }
+            { OR: orConditions }
           ]
         }
       });
 
-      if (name) duplicate.where.AND[1].OR.push({ name });
-      if (code) duplicate.where.AND[1].OR.push({ code });
-
-      const foundDuplicate = await prisma.department.findFirst(duplicate.where);
       if (foundDuplicate) {
         return res.status(400).json({
           success: false,

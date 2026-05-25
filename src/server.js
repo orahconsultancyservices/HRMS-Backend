@@ -67,6 +67,8 @@ const taskRoutes           = require('./routes/taskRoutes');
 const departmentRoutes     = require('./routes/departmentRoutes');
 const performanceRoutes    = require('./routes/performanceRoutes');
 const taskAssignmentRoutes = require('./routes/taskAssignmentRoutes');
+const accessPermissionRoutes = require('./routes/accessPermissionRoutes');
+const settingsRoutes         = require('./routes/settingsRoutes');
 
 app.use('/api/auth',            authRoutes);
 app.use('/api/employees',       employeeRoutes);
@@ -77,6 +79,8 @@ app.use('/api/tasks',           taskRoutes);
 app.use('/api/departments',     departmentRoutes);
 app.use('/api/performance',     performanceRoutes);
 app.use('/api/task-assignment', taskAssignmentRoutes);
+app.use('/api/access-permissions', accessPermissionRoutes);
+app.use('/api/settings',           settingsRoutes);
 
 // ─── 7. Health / root ─────────────────────────────────────────────────────────
 app.get('/health', (req, res) => {
@@ -112,8 +116,8 @@ app.use((req, res) => {
 });
 
 // ─── 10. Start server ─────────────────────────────────────────────────────────
-// const PORT = process.env.PORT || process.env.SERVER_PORT || 5000;
-const PORT = process.env.PORT || process.env.SERVER_PORT || 8080;
+const PORT = process.env.PORT || process.env.SERVER_PORT || 5000;
+// const PORT = process.env.PORT || process.env.SERVER_PORT || 8080;
 
 app.listen(PORT, '0.0.0.0', () => {  // ✅ Explicit 0.0.0.0 binding for Cloud Run
   console.log(`🚀 Server running on port ${PORT}`);

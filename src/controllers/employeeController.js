@@ -2,6 +2,7 @@
 
 const { PrismaClient } = require('@prisma/client');
 const bcrypt = require('bcrypt');
+const { getAccessibleDepartments } = require('../utils/departmentAccess');
 
 const prisma = require("../lib/prisma");
 
@@ -11,9 +12,40 @@ exports.getAllEmployees = async (req, res, next) => {
     const { department, position, search } = req.query;
     
     const where = {};
+
+    const scopedDepartments = getAccessibleDepartments(req.user);
+    if (scopedDepartments !== null) {
+      if (req.user?.role === 'employee') {
+        where.id = req.user.id;
+      } else if (req.user?.role === 'teamlead') {
+        // TeamLead sees only their direct reports by default.
+        // Additional department/team access granted by admin is also included.
+        const conditions = [{ reportTo: req.user.id }];
+        for (const perm of (req.user.accessPermissions || [])) {
+          if (perm.targetType === 'department') {
+            conditions.push({ department: perm.targetName });
+          } else if (perm.targetType === 'team') {
+            conditions.push({ reportTo: perm.targetId });
+          }
+        }
+        if (conditions.length === 1) {
+          where.reportTo = req.user.id;
+        } else {
+          where.OR = conditions;
+        }
+      } else {
+        where.department = { in: scopedDepartments };
+      }
+    }
     
     if (department && department !== 'all') {
-      where.department = department;
+      if (!where.department || typeof where.department === 'string') {
+        where.department = department;
+      } else {
+        where.department = {
+          in: where.department.in.filter((dept) => dept === department)
+        };
+      }
     }
     
     if (position && position !== 'all') {
@@ -179,7 +211,19 @@ exports.createEmployee = async (req, res, next) => {
     
     // Hash password
     const hashedPassword = await bcrypt.hash(orgPassword, 10);
-    
+
+    // Auto-resolve departmentId from the department name string
+    let resolvedDepartmentId = null;
+    if (department) {
+      try {
+        const deptRecord = await prisma.department.findFirst({
+          where: { name: { equals: department.trim(), mode: 'insensitive' }, isActive: true },
+          select: { id: true }
+        });
+        if (deptRecord) resolvedDepartmentId = deptRecord.id;
+      } catch (_) { /* non-fatal: continue without departmentId */ }
+    }
+
     // FIX: Handle birthday as UTC date without timezone conversion
     let birthdayDate = null;
     if (birthday) {
@@ -204,6 +248,7 @@ exports.createEmployee = async (req, res, next) => {
         orgPassword: orgPassword,
         phone,
         department,
+        departmentId: resolvedDepartmentId,
         position,
         joinDate: joinDate ? new Date(joinDate) : new Date(),
         leaveDate: leaveDate ? new Date(leaveDate) : null,
@@ -359,6 +404,17 @@ exports.updateEmployee = async (req, res, next) => {
       delete updateData.orgPassword;
     }
     
+    // Auto-resolve departmentId when department name is provided but departmentId is not
+    if (updateData.department && updateData.departmentId === undefined) {
+      try {
+        const deptRecord = await prisma.department.findFirst({
+          where: { name: { equals: updateData.department.trim(), mode: 'insensitive' }, isActive: true },
+          select: { id: true }
+        });
+        if (deptRecord) updateData.departmentId = deptRecord.id;
+      } catch (_) { /* non-fatal */ }
+    }
+
     // Convert date strings to Date objects
     if (updateData.joinDate) {
       updateData.joinDate = new Date(updateData.joinDate);
@@ -369,7 +425,7 @@ exports.updateEmployee = async (req, res, next) => {
     if (updateData.birthday) {
       updateData.birthday = new Date(updateData.birthday);
     }
-    
+
     // Update employee
     const employee = await prisma.employee.update({
       where: { id: parseInt(id) },
@@ -568,6 +624,81 @@ exports.getPositions = async (req, res, next) => {
     res.status(200).json({
       success: true,
       data: positionList
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+// ─── Backfill: create Department records + link departmentId ─────────────────
+// Safe to call multiple times (fully idempotent).
+// Step 1 – collect every unique department string from active employees
+// Step 2 – create a Department row for any that don't have one yet
+// Step 3 – set departmentId on every employee that still has null
+exports.backfillDepartmentIds = async (req, res, next) => {
+  try {
+    // ── Step 1: unique department strings used by active employees ────────
+    const empRows = await prisma.employee.findMany({
+      where: { isActive: true },
+      select: { id: true, department: true, departmentId: true }
+    });
+
+    const uniqueNames = [...new Set(
+      empRows
+        .map(e => (e.department || '').trim())
+        .filter(Boolean)
+    )];
+
+    // ── Step 2: ensure a Department row exists for each name ─────────────
+    const existingDepts = await prisma.department.findMany({
+      select: { id: true, name: true, code: true }
+    });
+    const deptMap = new Map(existingDepts.map(d => [d.name.trim().toLowerCase(), d.id]));
+    const usedCodes = new Set(existingDepts.map(d => d.code));
+
+    let created = 0;
+    for (const name of uniqueNames) {
+      const key = name.toLowerCase();
+      if (deptMap.has(key)) continue; // already exists
+
+      // Generate a clean, unique code from the name
+      let code = name.toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 10);
+      if (!code) code = 'DEPT';
+      let suffix = 1;
+      let finalCode = code;
+      while (usedCodes.has(finalCode)) {
+        finalCode = `${code.slice(0, 8)}${suffix++}`;
+      }
+      usedCodes.add(finalCode);
+
+      try {
+        const newDept = await prisma.department.create({
+          data: { name, code: finalCode, isActive: true }
+        });
+        deptMap.set(key, newDept.id);
+        created++;
+      } catch (_) {
+        // Extremely unlikely race condition – skip
+      }
+    }
+
+    // ── Step 3: set departmentId on employees that are still unlinked ────
+    let updated = 0;
+    for (const emp of empRows) {
+      if (emp.departmentId) continue; // already linked
+      const key = (emp.department || '').trim().toLowerCase();
+      const deptId = deptMap.get(key);
+      if (!deptId) continue;
+      await prisma.employee.update({
+        where: { id: emp.id },
+        data: { departmentId: deptId }
+      });
+      updated++;
+    }
+
+    res.status(200).json({
+      success: true,
+      message: `Backfill complete: ${created} department(s) created, ${updated} employee(s) linked.`,
+      data: { created, updated, totalEmployees: empRows.length }
     });
   } catch (error) {
     next(error);

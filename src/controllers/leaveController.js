@@ -3,6 +3,7 @@
 const { PrismaClient } = require('@prisma/client');
 const prisma = require("../lib/prisma");
 const paidLeaveService = require('../services/paidLeaveService');
+const { getAccessibleDepartments } = require('../utils/departmentAccess');
 
 // Get all leave requests
 exports.getAllLeaves = async (req, res, next) => {
@@ -10,6 +11,7 @@ exports.getAllLeaves = async (req, res, next) => {
     const { status, empId, from, to } = req.query;
 
     const where = {};
+    const scopedDepartments = getAccessibleDepartments(req.user);
 
     if (status && status !== 'all') {
       where.status = status;
@@ -17,6 +19,28 @@ exports.getAllLeaves = async (req, res, next) => {
 
     if (empId) {
       where.empId = parseInt(empId);
+    }
+
+    if (scopedDepartments !== null) {
+      if (req.user?.role === 'employee') {
+        where.empId = req.user.id;
+      } else if (req.user?.role === 'teamlead') {
+        const conditions = [{ reportTo: req.user.id }];
+        for (const perm of (req.user.accessPermissions || [])) {
+          if (perm.targetType === 'department') {
+            conditions.push({ department: perm.targetName });
+          } else if (perm.targetType === 'team') {
+            conditions.push({ reportTo: perm.targetId });
+          }
+        }
+        where.employee = conditions.length === 1
+          ? { reportTo: req.user.id }
+          : { OR: conditions };
+      } else {
+        where.employee = {
+          department: { in: scopedDepartments }
+        };
+      }
     }
 
     if (from || to) {
@@ -183,6 +207,14 @@ exports.createLeave = async (req, res, next) => {
       });
     }
 
+    // Only Paid and Unpaid leave types are allowed
+    if (type !== 'Paid' && type !== 'Unpaid') {
+      return res.status(400).json({
+        success: false,
+        message: 'Invalid leave type. Only "Paid" and "Unpaid" leave types are allowed.'
+      });
+    }
+
     const fromDate = new Date(from);
     const toDate = isHalfDay ? fromDate : new Date(to || from);
 
@@ -246,35 +278,22 @@ if (isHalfDay) {
       let isPaid = false;
       let paidDays = 0;
 
-      if (type === 'Paid' || type === 'Unpaid') {
+      if (type === 'Paid') {
         const paidLeaveCheck = await paidLeaveService.canBePaidLeave(
           parseInt(empId),
           days,
           tx
         );
 
-        if (type === 'Paid') {
-          if (!paidLeaveCheck.canBePaid && paidLeaveCheck.paidDays === 0) {
-            throw new Error('No paid leaves available. Please apply for unpaid leave.');
-          }
-          isPaid = true;
-          paidDays = paidLeaveCheck.paidDays;
-        } else {
-          isPaid = false;
-          paidDays = 0;
-        }
-      } else {
-        // Regular leave types
-        const leaveType = type.toLowerCase();
-        const currentBalance = employee.leaveBalance[leaveType];
-
-        if (currentBalance < days) {
-          throw new Error(
-            `Insufficient ${type} leave balance. Available: ${currentBalance} days, Requested: ${days} days`
-          );
+        if (!paidLeaveCheck.canBePaid && paidLeaveCheck.paidDays === 0) {
+          throw new Error('No paid leaves available. Please apply for unpaid leave.');
         }
         isPaid = true;
-        paidDays = days;
+        paidDays = paidLeaveCheck.paidDays;
+      } else {
+        // Unpaid leave — no balance check needed
+        isPaid = false;
+        paidDays = 0;
       }
 
       // Create leave request
@@ -470,54 +489,21 @@ exports.updateLeaveStatus = async (req, res, next) => {
         throw new Error('Leave request not found');
       }
 
-      // If approving, check and deduct balance
+      // If approving a Paid leave, verify balance is sufficient
       if (status === 'approved' && leave.status !== 'approved') {
-        // For Paid/Unpaid types, check paid leave balance
-        if (leave.type === 'Paid' || leave.type === 'Unpaid') {
-          if (leave.type === 'Paid') {
-            // Re-check balance within transaction
-            const paidLeaveCheck = await paidLeaveService.canBePaidLeave(
-              leave.empId,
-              leave.days,
-              tx // Pass transaction client
-            );
+        if (leave.type === 'Paid') {
+          // Re-check balance within transaction
+          const paidLeaveCheck = await paidLeaveService.canBePaidLeave(
+            leave.empId,
+            leave.days,
+            tx
+          );
 
-            if (!paidLeaveCheck.canBePaid && paidLeaveCheck.paidDays === 0) {
-              throw new Error('Insufficient paid leave balance');
-            }
+          if (!paidLeaveCheck.canBePaid && paidLeaveCheck.paidDays === 0) {
+            throw new Error('Insufficient paid leave balance');
           }
-        } else {
-          // Regular leave types (Casual, Sick, etc.)
-          const leaveType = leave.type.toLowerCase();
-          const currentBalance = leave.employee.leaveBalance[leaveType];
-
-          if (currentBalance < leave.days) {
-            throw new Error(`Insufficient ${leave.type} leave balance`);
-          }
-
-          // Update leave balance within transaction
-          await tx.leaveBalance.update({
-            where: { employeeId: leave.empId },
-            data: {
-              [leaveType]: currentBalance - leave.days
-            }
-          });
         }
-      }
-
-      // If rejecting an approved leave, restore balance
-      if (status === 'rejected' && leave.status === 'approved') {
-        if (leave.type !== 'Paid' && leave.type !== 'Unpaid') {
-          const leaveType = leave.type.toLowerCase();
-          const currentBalance = leave.employee.leaveBalance[leaveType];
-
-          await tx.leaveBalance.update({
-            where: { employeeId: leave.empId },
-            data: {
-              [leaveType]: currentBalance + leave.days
-            }
-          });
-        }
+        // Unpaid leave: no balance check needed
       }
 
       // Update leave status
@@ -579,24 +565,8 @@ exports.deleteLeave = async (req, res, next) => {
       });
     }
 
-    // If approved leave is being deleted, restore balance
-    if (existingLeave.status === 'approved' && existingLeave.type !== 'Paid' && existingLeave.type !== 'Unpaid') {
-      const employee = await prisma.employee.findUnique({
-        where: { id: existingLeave.empId },
-        include: { leaveBalance: true }
-      });
-
-      const leaveType = existingLeave.type.toLowerCase();
-      const currentBalance = employee.leaveBalance[leaveType];
-
-      await prisma.leaveBalance.update({
-        where: { employeeId: existingLeave.empId },
-        data: {
-          [leaveType]: currentBalance + existingLeave.days
-        }
-      });
-    }
-
+    // Paid/Unpaid leaves use dynamic accrual — no balance column to restore.
+    // Simply delete the record; the consumed count adjusts automatically.
     await prisma.leaveRequest.delete({
       where: { id: parseInt(id) }
     });
@@ -617,8 +587,34 @@ exports.deleteLeave = async (req, res, next) => {
 exports.getLeaveStatistics = async (req, res, next) => {
   try {
     const { empId } = req.query;
+    const scopedDepartments = getAccessibleDepartments(req.user);
 
     const where = empId ? { empId: parseInt(empId) } : {};
+    if (scopedDepartments !== null) {
+      if (req.user?.role === 'employee') {
+        where.empId = req.user.id;
+      } else if (req.user?.role === 'teamlead') {
+        const conditions = [{ reportTo: req.user.id }];
+        for (const perm of (req.user.accessPermissions || [])) {
+          if (perm.targetType === 'department') {
+            conditions.push({ department: perm.targetName });
+          } else if (perm.targetType === 'team') {
+            conditions.push({ reportTo: perm.targetId });
+          }
+        }
+        const teamEmployees = await prisma.employee.findMany({
+          where: conditions.length === 1 ? { reportTo: req.user.id, isActive: true } : { OR: conditions, isActive: true },
+          select: { id: true }
+        });
+        where.empId = { in: teamEmployees.map((e) => e.id) };
+      } else {
+        const scopedEmployees = await prisma.employee.findMany({
+          where: { department: { in: scopedDepartments }, isActive: true },
+          select: { id: true }
+        });
+        where.empId = { in: scopedEmployees.map((employee) => employee.id) };
+      }
+    }
 
     const totalLeaves = await prisma.leaveRequest.count({ where });
     const pendingLeaves = await prisma.leaveRequest.count({ where: { ...where, status: 'pending' } });

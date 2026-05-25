@@ -11,7 +11,8 @@ const {
   updateLeaveBalance,
   getDepartments,
   getPositions,
-  getEmployeeByCode
+  getEmployeeByCode,
+  backfillDepartmentIds,
 } = require('../controllers/employeeController');
 
 /**
@@ -77,5 +78,8 @@ router.delete('/:id', deleteEmployee);
 // Leave balance routes
 router.get('/:id/leave-balance', getLeaveBalance);
 router.put('/:id/leave-balance', updateLeaveBalance);
+
+// One-time backfill: link departmentId for existing employees (safe to call multiple times)
+router.post('/backfill-department-ids', backfillDepartmentIds);
 
 module.exports = router;
