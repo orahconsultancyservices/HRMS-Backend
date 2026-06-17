@@ -789,6 +789,139 @@ exports.getCompanyPerformance = async (req, res, next) => {
     next(error);
   }
 };
+// Bulk generate monthly performance snapshots for all active employees (Admin only)
+exports.bulkGenerateMonthlyPerformance = async (req, res, next) => {
+  try {
+    const { year, month, departmentId } = req.body;
+
+    if (!year || !month) {
+      return res.status(400).json({
+        success: false,
+        message: 'Please provide year and month'
+      });
+    }
+
+    const parsedYear  = parseInt(year);
+    const parsedMonth = parseInt(month);
+
+    // Fetch all active employees (optionally filtered by department)
+    const employeeWhere = { isActive: true };
+    if (departmentId) employeeWhere.departmentId = parseInt(departmentId);
+
+    const employees = await prisma.employee.findMany({
+      where: employeeWhere,
+      include: {
+        designation: { select: { id: true, name: true } },
+        dept:        { select: { id: true, name: true } }
+      }
+    });
+
+    const startDate = new Date(parsedYear, parsedMonth - 1, 1);
+    const endDate   = new Date(parsedYear, parsedMonth, 0, 23, 59, 59);
+
+    let generated = 0;
+    let skipped   = 0;
+    const errors  = [];
+
+    for (const employee of employees) {
+      try {
+        // Skip if snapshot already exists
+        const existing = await prisma.monthlyPerformance.findUnique({
+          where: {
+            employeeId_year_month: {
+              employeeId: employee.id,
+              year: parsedYear,
+              month: parsedMonth
+            }
+          }
+        });
+
+        if (existing) { skipped++; continue; }
+
+        // Aggregate tasks for the month
+        const tasks = await prisma.task.findMany({
+          where: {
+            assignedToId: employee.id,
+            deadline: { gte: startDate, lte: endDate }
+          },
+          include: {
+            submissions: {
+              where: {
+                employeeId: employee.id,
+                date: { gte: startDate, lte: endDate }
+              }
+            }
+          }
+        });
+
+        const totalTasks      = tasks.length;
+        const totalTarget     = tasks.reduce((s, t) => s + t.target, 0);
+        const totalAchieved   = tasks.reduce((s, t) => s + t.achieved, 0);
+        const achievementPct  = totalTarget > 0 ? (totalAchieved / totalTarget) * 100 : 0;
+
+        const daily   = tasks.filter(t => t.type === 'daily');
+        const weekly  = tasks.filter(t => t.type === 'weekly');
+        const monthly = tasks.filter(t => t.type === 'monthly');
+
+        // Trend vs last month
+        const lastPerf = await prisma.monthlyPerformance.findUnique({
+          where: {
+            employeeId_year_month: {
+              employeeId: employee.id,
+              year:  parsedMonth === 1 ? parsedYear - 1 : parsedYear,
+              month: parsedMonth === 1 ? 12 : parsedMonth - 1
+            }
+          }
+        });
+
+        let trendVsLastMonth = 'stable';
+        let percentageChange = 0;
+        if (lastPerf) {
+          const change = achievementPct - lastPerf.achievementPercent;
+          percentageChange = change;
+          if      (change >  5) trendVsLastMonth = 'up';
+          else if (change < -5) trendVsLastMonth = 'down';
+        }
+
+        await prisma.monthlyPerformance.create({
+          data: {
+            employeeId:           employee.id,
+            year:                 parsedYear,
+            month:                parsedMonth,
+            designationId:        employee.designation?.id,
+            departmentId:         employee.dept?.id,
+            totalTasksAssigned:   totalTasks,
+            totalTasksCompleted:  tasks.filter(t => t.status === 'completed').length,
+            totalTarget,
+            totalAchieved,
+            achievementPercent:   achievementPct,
+            dailyTarget:          daily.reduce((s, t) => s + t.target, 0),
+            dailyAchieved:        daily.reduce((s, t) => s + t.achieved, 0),
+            weeklyTarget:         weekly.reduce((s, t) => s + t.target, 0),
+            weeklyAchieved:       weekly.reduce((s, t) => s + t.achieved, 0),
+            monthlyTarget:        monthly.reduce((s, t) => s + t.target, 0),
+            monthlyAchieved:      monthly.reduce((s, t) => s + t.achieved, 0),
+            trendVsLastMonth,
+            percentageChange
+          }
+        });
+
+        generated++;
+      } catch (empErr) {
+        errors.push(`Employee ${employee.id}: ${empErr.message}`);
+      }
+    }
+
+    res.status(200).json({
+      success: true,
+      message: `Generated ${generated} snapshot(s). Skipped ${skipped} existing. ${errors.length} error(s).`,
+      data: { generated, skipped, errors, year: parsedYear, month: parsedMonth }
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
 // Bulk lock monthly performance for a month (Admin only - month-end close)
 exports.bulkLockMonthlyPerformance = async (req, res, next) => {
   try {

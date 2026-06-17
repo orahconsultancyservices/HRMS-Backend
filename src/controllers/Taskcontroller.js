@@ -9,8 +9,8 @@ const { getAccessibleDepartments } = require('../utils/departmentAccess');
 // ============================================
 exports.getAllTasks = async (req, res, next) => {
   try {
-    const { type, status, category, assignedTo, assignedBy, search } = req.query;
-    
+    const { type, status, category, assignedTo, assignedBy, search, month, year } = req.query;
+
         // ── NEW: dept-scoped filtering via x-user header ──────────────────
     const reqUser = req.user; // populated by extractUser middleware
     const where = {};
@@ -18,8 +18,29 @@ exports.getAllTasks = async (req, res, next) => {
     const scopedDepartments = getAccessibleDepartments(reqUser);
     if (scopedDepartments !== null) {
       if (reqUser?.role === 'employee') {
+        // Employee sees only tasks assigned to themselves
         where.assignedToId = reqUser.id;
+      } else if (reqUser?.role === 'teamlead') {
+        // Team lead: direct reports + themselves (catches admin-assigned tasks to the TL)
+        // Also adds any extra department/team access permissions granted by admin
+        const conditions = [
+          { reportTo: reqUser.id }, // direct reports
+          { id: reqUser.id },       // team lead themselves
+        ];
+        for (const perm of (reqUser.accessPermissions || [])) {
+          if (perm.targetType === 'department') {
+            conditions.push({ department: perm.targetName });
+          } else if (perm.targetType === 'team') {
+            conditions.push({ reportTo: perm.targetId });
+          }
+        }
+        const scopedEmployees = await prisma.employee.findMany({
+          where: { OR: conditions, isActive: true },
+          select: { id: true }
+        });
+        where.assignedToId = { in: scopedEmployees.map((e) => e.id) };
       } else {
+        // Manager / HR fall-through: scope by accessible departments
         const scopedEmployees = await prisma.employee.findMany({
           where: { department: { in: scopedDepartments }, isActive: true },
           select: { id: true }
@@ -37,6 +58,15 @@ exports.getAllTasks = async (req, res, next) => {
         { title:       { contains: search } },
         { description: { contains: search } }
       ];
+    }
+
+    // ── Month / Year filter — scope tasks whose deadline falls in the period ──
+    if (month && year) {
+      const m = parseInt(month);
+      const y = parseInt(year);
+      const startOfMonth = new Date(y, m - 1, 1, 0, 0, 0, 0);
+      const endOfMonth   = new Date(y, m,     0, 23, 59, 59, 999); // day 0 of next month = last day of this month
+      where.deadline = { gte: startOfMonth, lte: endOfMonth };
     }
     
     const tasks = await prisma.task.findMany({
@@ -322,7 +352,16 @@ exports.updateTask = async (req, res, next) => {
 exports.deleteTask = async (req, res, next) => {
   try {
     const { id } = req.params;
-    
+
+    // Only employer/admin and manager roles can delete tasks — team leads cannot
+    const allowedRoles = ['employer', 'admin', 'manager'];
+    if (req.user && req.user.role && !allowedRoles.includes(req.user.role)) {
+      return res.status(403).json({
+        success: false,
+        message: 'Only employers and managers can delete tasks'
+      });
+    }
+
     const existingTask = await prisma.task.findUnique({ where: { id: parseInt(id) } });
     if (!existingTask) {
       return res.status(404).json({ success: false, message: 'Task not found' });

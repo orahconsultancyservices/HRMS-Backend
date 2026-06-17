@@ -9,6 +9,7 @@ const {
   upsertDailyActivity,
   getMonthlyPerformance,
   generateMonthlyPerformance,
+  bulkGenerateMonthlyPerformance,
   addPerformanceRemarks,
   lockMonthlyPerformance,
   bulkLockMonthlyPerformance,
@@ -29,6 +30,7 @@ router.post('/daily-activities', upsertDailyActivity);
 
 router.get('/employees/:employeeId/monthly-performance', getMonthlyPerformance);
 router.post('/monthly-performance/generate', generateMonthlyPerformance);
+router.post('/monthly-performance/bulk-generate', bulkGenerateMonthlyPerformance);
 router.put('/monthly-performance/:id/remarks', addPerformanceRemarks);
 router.put('/monthly-performance/:id/lock', lockMonthlyPerformance);
 router.post('/monthly-performance/bulk-lock', bulkLockMonthlyPerformance);

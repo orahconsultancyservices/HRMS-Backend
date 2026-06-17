@@ -937,10 +937,12 @@ exports.getAttendanceStats = async (req, res, next) => {
         where.date.lte = timezoneUtils.toEndOfDayEST(new Date(endDate));
       }
     } else {
-      const now = timezoneUtils.now();
+      // toEST() correctly extracts the EDT calendar components (year/month) from
+      // the current UTC instant, so getFullYear()/getMonth() return the right values.
+      const estNow = timezoneUtils.toEST(new Date());
       where.date = {
-        gte: timezoneUtils.getMonthStart(now.getFullYear(), now.getMonth()),
-        lte: timezoneUtils.getMonthEnd(now.getFullYear(), now.getMonth())
+        gte: timezoneUtils.getMonthStart(estNow.getFullYear(), estNow.getMonth()),
+        lte: timezoneUtils.getMonthEnd(estNow.getFullYear(), estNow.getMonth())
       };
     }
 

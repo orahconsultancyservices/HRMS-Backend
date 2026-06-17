@@ -294,25 +294,9 @@ exports.adjustTaskTarget = async (req, res, next) => {
       });
     }
 
+    // Step 1: fetch the task itself first (type/category needed for the KPI filter below)
     const task = await prisma.task.findUnique({
-      where: { id: parseInt(taskId) },
-      include: {
-        assignedTo: {
-          include: {
-            designation: {
-              include: {
-                defaultKPIs: {
-                  where: { 
-                    type: task.type,
-                    category: task.category,
-                    isActive: true 
-                  }
-                }
-              }
-            }
-          }
-        }
-      }
+      where: { id: parseInt(taskId) }
     });
 
     if (!task) {
@@ -329,8 +313,30 @@ exports.adjustTaskTarget = async (req, res, next) => {
       });
     }
 
+    // Step 2: now fetch the designation's default KPI using the task's own type/category
+    const taskWithDesignation = await prisma.task.findUnique({
+      where: { id: parseInt(taskId) },
+      include: {
+        assignedTo: {
+          include: {
+            designation: {
+              include: {
+                defaultKPIs: {
+                  where: {
+                    type: task.type,
+                    category: task.category,
+                    isActive: true
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    });
+
     // Get default KPI for validation
-    const defaultKPI = task.assignedTo.designation?.defaultKPIs[0];
+    const defaultKPI = taskWithDesignation?.assignedTo?.designation?.defaultKPIs[0];
     if (defaultKPI) {
       const minAllowed = Math.floor(defaultKPI.defaultTarget * 0.8); // 20% reduction
       const maxAllowed = Math.ceil(defaultKPI.defaultTarget * 1.2);   // 20% increase
@@ -412,7 +418,9 @@ exports.getTeamTasks = async (req, res, next) => {
 
     const where = {
       assignedToId: {
-        in: teamMembers.map(m => m.id)
+        // Include team members AND the team lead themselves
+        // (admins can assign tasks directly to the team lead)
+        in: [...teamMembers.map(m => m.id), parsedTeamLeadId]
       }
     };
 

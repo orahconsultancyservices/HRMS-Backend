@@ -22,33 +22,20 @@ const timezoneUtils = {
   // ============================================
 
   /**
-   * Get current date/time in EST
-   * Use this instead of new Date()
+   * Get current date/time as a proper UTC timestamp.
+   * Use this instead of new Date() for any value that will be stored in the DB.
+   *
+   * Previously this function extracted EST wall-clock components and fed them to
+   * new Date(year, month, day, h, m, s) — which interprets them in the *server's*
+   * local timezone (UTC on most servers).  That caused a 4-hour shift: a 9:45 AM
+   * EDT punch-in was stored as 09:45 UTC (= 5:45 AM EDT), and the frontend
+   * displayed the UTC timestamp in the browser's EDT timezone — showing 5:45.
+   *
+   * The fix is simple: a "moment in time" is timezone-independent.  new Date()
+   * always returns the correct current moment in UTC.  Timezone conversion is only
+   * needed for *display*, not for *storage*.
    */
-  now: () => {
-    const now = new Date();
-    // Use Intl.DateTimeFormat to get the correct time components
-    const formatter = new Intl.DateTimeFormat('en-US', {
-      timeZone: TIMEZONE,
-      year: 'numeric',
-      month: 'numeric',
-      day: 'numeric',
-      hour: 'numeric',
-      minute: 'numeric',
-      second: 'numeric',
-      hour12: false
-    });
-    
-    const parts = formatter.formatToParts(now);
-    const year = parseInt(parts.find(p => p.type === 'year')?.value || '0');
-    const month = parseInt(parts.find(p => p.type === 'month')?.value || '0') - 1;
-    const day = parseInt(parts.find(p => p.type === 'day')?.value || '0');
-    const hour = parseInt(parts.find(p => p.type === 'hour')?.value || '0');
-    const minute = parseInt(parts.find(p => p.type === 'minute')?.value || '0');
-    const second = parseInt(parts.find(p => p.type === 'second')?.value || '0');
-    
-    return new Date(year, month, day, hour, minute, second);
-  },
+  now: () => new Date(),
 
   /**
    * Convert any date to EST
